@@ -8,6 +8,7 @@ from checks.custom.banned_patterns import check_banned_patterns, check_obsolete_
 from checks.custom.duplicate_keys import check_duplicate_keys
 from checks.custom.unicode_artifacts import check_unicode_artifacts
 from checks.custom.unreachable_code import check_unreachable_code
+from checks.runner import is_excluded
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -56,6 +57,27 @@ class TestUnicodeArtifacts:
         # String: skipped for Python (tokenizer)
         assert echoes == []
 
+    def test_skips_js_strings_and_comments(self):
+        # Unicode inside JS/TS string literals and comments should be skipped
+        echoes = check_unicode_artifacts(str(FIXTURES / "unicode_in_js_strings.ts"))
+        assert echoes == []
+
+    def test_detects_unicode_in_js_code(self):
+        # Unicode in actual JS/TS code (not strings/comments) should fire
+        echoes = check_unicode_artifacts(str(FIXTURES / "unicode_in_js_code.ts"))
+        assert len(echoes) == 2
+        assert all(e.check == "unicode-artifact" for e in echoes)
+        lines = {e.line for e in echoes}
+        assert 1 in lines  # non-breaking space
+        assert 2 in lines  # em dash
+
+    def test_js_mixed_strings_and_code(self):
+        # Unicode in strings should be skipped, unicode in code should fire
+        echoes = check_unicode_artifacts(str(FIXTURES / "unicode_js_mixed.ts"))
+        assert len(echoes) == 1
+        assert echoes[0].check == "unicode-artifact"
+        assert echoes[0].line == 3  # non-breaking space in code
+
     def test_clean_file(self):
         echoes = check_unicode_artifacts(str(FIXTURES / "clean.py"))
         assert echoes == []
@@ -103,3 +125,51 @@ class TestObsoleteTerms:
         terms = [{"old": "UserProfile", "new": "Account"}]
         echoes = check_obsolete_terms(str(f), terms)
         assert echoes == []
+
+
+class TestIsExcluded:
+    def test_default_fixtures_excluded(self):
+        assert is_excluded("/proj/tests/fixtures/bad.py", "/proj", [])
+
+    def test_default_fixtures_at_root(self):
+        assert is_excluded("/proj/fixtures/bad.py", "/proj", [])
+
+    def test_default_snapshots_excluded(self):
+        assert is_excluded("/proj/src/__snapshots__/x.snap", "/proj", [])
+
+    def test_default_node_modules_excluded(self):
+        assert is_excluded("/proj/node_modules/pkg/index.js", "/proj", [])
+
+    def test_default_node_modules_at_root(self):
+        assert is_excluded("/proj/node_modules/index.js", "/proj", [])
+
+    def test_default_vendor_excluded(self):
+        assert is_excluded("/proj/vendor/lib/foo.go", "/proj", [])
+
+    def test_default_vendor_at_root(self):
+        assert is_excluded("/proj/vendor/foo.go", "/proj", [])
+
+    def test_default_dist_excluded(self):
+        assert is_excluded("/proj/dist/bundle.js", "/proj", [])
+
+    def test_default_build_excluded(self):
+        assert is_excluded("/proj/build/output.js", "/proj", [])
+
+    def test_default_pycache_excluded(self):
+        assert is_excluded("/proj/src/__pycache__/mod.pyc", "/proj", [])
+
+    def test_filename_not_matched(self):
+        # "fixtures" as a filename should NOT be excluded
+        assert not is_excluded("/proj/src/fixtures", "/proj", [])
+
+    def test_normal_file_not_excluded(self):
+        assert not is_excluded("/proj/src/main.py", "/proj", [])
+
+    def test_user_exclude_pattern(self):
+        assert is_excluded("/proj/generated/api.ts", "/proj", ["generated/*"])
+
+    def test_user_exclude_glob(self):
+        assert is_excluded("/proj/app/bundle.min.js", "/proj", ["*.min.js"])
+
+    def test_user_exclude_no_false_match(self):
+        assert not is_excluded("/proj/src/app.ts", "/proj", ["generated/*"])

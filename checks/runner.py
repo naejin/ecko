@@ -12,15 +12,33 @@ from pathlib import Path
 # Ensure the checks package is importable
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from fnmatch import fnmatch
+
 from checks.config import (
     get_banned_patterns,
     get_disabled_checks,
+    get_exclude_patterns,
     get_obsolete_terms,
     is_autofix_enabled,
     is_deep_enabled,
     load_config,
 )
 from checks.result import Echo, emit, format_file_echoes, format_stop_echoes
+
+# Paths that are almost never worth linting — skip by default.
+# Each entry is matched at any depth: "fixtures" matches both
+# "tests/fixtures/x.py" and "fixtures/x.py".
+_DEFAULT_EXCLUDE_DIRS = [
+    "fixtures",
+    "__fixtures__",
+    "__snapshots__",
+    "vendor",
+    "node_modules",
+    ".git",
+    "dist",
+    "build",
+    "__pycache__",
+]
 
 LANG_MAP = {
     ".py": "python",
@@ -38,6 +56,29 @@ LANG_MAP = {
 def detect_language(file_path: str) -> str:
     ext = Path(file_path).suffix.lower()
     return LANG_MAP.get(ext, "unknown")
+
+
+def is_excluded(file_path: str, cwd: str, user_excludes: list[str]) -> bool:
+    """Check if a file matches any exclude pattern (default + user-configured)."""
+    # Use the path relative to cwd for matching
+    try:
+        rel = os.path.relpath(file_path, cwd)
+    except ValueError:
+        rel = file_path
+    # Normalize to forward slashes for consistent matching
+    rel = rel.replace(os.sep, "/")
+
+    # Built-in: skip if any path segment is in _DEFAULT_EXCLUDE_DIRS
+    parts = rel.split("/")
+    for part in parts[:-1]:  # check directories, not the filename
+        if part in _DEFAULT_EXCLUDE_DIRS:
+            return True
+
+    # User-configured glob patterns (matched against relative path)
+    for pattern in user_excludes:
+        if fnmatch(rel, pattern):
+            return True
+    return False
 
 
 def filter_suppressed(echoes: list[Echo], file_path: str) -> list[Echo]:
@@ -86,6 +127,9 @@ def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
         return 0
 
     config = load_config(cwd)
+    if is_excluded(file_path, cwd, get_exclude_patterns(config)):
+        return 0
+
     disabled = get_disabled_checks(config)
     lang = detect_language(file_path)
 
@@ -148,9 +192,13 @@ def run_stop(cwd: str, plugin_root: str) -> int:
     """Run Layer 3 (deep analysis) + Layer 2 re-sweep on all modified files."""
     config = load_config(cwd)
     disabled = get_disabled_checks(config)
+    user_excludes = get_exclude_patterns(config)
 
-    # Find modified files
-    modified = _get_modified_files(cwd)
+    # Find modified files, filtering excluded paths
+    modified = [
+        f for f in _get_modified_files(cwd)
+        if not is_excluded(f, cwd, user_excludes)
+    ]
     if not modified:
         return 0
 
@@ -246,8 +294,12 @@ def run_stop(cwd: str, plugin_root: str) -> int:
                 deduped.append(echo)
         all_echoes[path] = deduped
 
-    # Filter disabled
+    # Filter excluded paths (Layer 3 tools may report on files outside modified list)
     for path in list(all_echoes.keys()):
+        if is_excluded(path, cwd, user_excludes):
+            del all_echoes[path]
+            continue
+        # Filter disabled checks
         all_echoes[path] = [e for e in all_echoes[path] if e.check not in disabled]
         if not all_echoes[path]:
             del all_echoes[path]

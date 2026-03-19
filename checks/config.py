@@ -201,6 +201,14 @@ def is_deep_enabled(config: dict[str, Any], tool: str) -> bool:
     return True
 
 
+def get_exclude_patterns(config: dict[str, Any]) -> list[str]:
+    """Return list of glob patterns to exclude from checks."""
+    patterns = config.get("exclude", [])
+    if isinstance(patterns, list):
+        return [str(p) for p in patterns]
+    return []
+
+
 def get_banned_patterns(config: dict[str, Any]) -> list[dict[str, str]]:
     """Return list of banned pattern dicts from config."""
     patterns = config.get("banned_patterns", [])

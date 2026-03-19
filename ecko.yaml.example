@@ -26,6 +26,15 @@ obsolete_terms:
   - old: "UserProfile"
     new: "Account"
 
+# Exclude files from all checks (glob patterns, matched against relative paths)
+# Built-in: any file under a directory named fixtures, __fixtures__,
+# __snapshots__, vendor, node_modules, .git, dist, build, or __pycache__
+# is automatically excluded at any depth.
+# Add your own glob patterns below (matched via fnmatch against relative paths):
+exclude: []
+  # - "generated/*"
+  # - "*.min.js"
+
 # Disable specific built-in checks (by ecko check name)
 # Available checks: unused-imports, singleton-comparison, bare-except,
 #   star-imports, mutable-default-args, builtin-shadowing, empty-error-handlers,

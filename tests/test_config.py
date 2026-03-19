@@ -9,6 +9,7 @@ from checks.config import (
     _parse_yaml_subset,
     get_banned_patterns,
     get_disabled_checks,
+    get_exclude_patterns,
     get_obsolete_terms,
     is_autofix_enabled,
     is_deep_enabled,
@@ -115,3 +116,11 @@ class TestConfigHelpers:
         terms = get_obsolete_terms(config)
         assert len(terms) == 1
         assert terms[0]["old"] == "Foo"
+
+    def test_exclude_patterns(self):
+        config = {"exclude": ["generated/*", "*.min.js"]}
+        patterns = get_exclude_patterns(config)
+        assert patterns == ["generated/*", "*.min.js"]
+
+    def test_exclude_patterns_empty(self):
+        assert get_exclude_patterns({}) == []

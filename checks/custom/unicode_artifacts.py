@@ -89,13 +89,86 @@ def _get_skip_regions(
         except tokenize.TokenError:
             pass
     else:
-        # For non-Python files, skip lines that look like string content or comments
-        # This is a conservative heuristic
-        lines = source.splitlines()
-        for i, line in enumerate(lines, 1):
-            stripped = line.lstrip()
-            if stripped.startswith("//") or stripped.startswith("#"):
-                regions.append((i, 0, i, len(line)))
+        regions = _scan_js_skip_regions(source)
+
+    return regions
+
+
+def _scan_js_skip_regions(source: str) -> list[tuple[int, int, int, int]]:
+    """Scan JS/TS/CSS/JSON source for string literals and comments.
+
+    Returns (start_line, start_col, end_line, end_col) regions to skip.
+    Handles: // line comments, /* block comments */, and string literals
+    with single, double, and backtick (template literal) delimiters.
+    """
+    regions: list[tuple[int, int, int, int]] = []
+    lines = source.splitlines()
+    line_offsets: list[int] = []
+    offset = 0
+    for line in lines:
+        line_offsets.append(offset)
+        offset += len(line) + 1  # +1 for newline
+
+    def pos_to_lc(pos: int) -> tuple[int, int]:
+        """Convert flat offset to (1-based line, 0-based col)."""
+        lo, hi = 0, len(line_offsets) - 1
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if line_offsets[mid] <= pos:
+                lo = mid
+            else:
+                hi = mid - 1
+        return lo + 1, pos - line_offsets[lo]
+
+    i = 0
+    n = len(source)
+    while i < n:
+        c = source[i]
+
+        # Single-line comment
+        if c == "/" and i + 1 < n and source[i + 1] == "/":
+            start = i
+            while i < n and source[i] != "\n":
+                i += 1
+            sl, sc = pos_to_lc(start)
+            el, ec = pos_to_lc(i)
+            regions.append((sl, sc, el, ec))
+            continue
+
+        # Block comment
+        if c == "/" and i + 1 < n and source[i + 1] == "*":
+            start = i
+            i += 2
+            while i + 1 < n and not (source[i] == "*" and source[i + 1] == "/"):
+                i += 1
+            if i + 1 < n:
+                i += 2  # skip */
+            sl, sc = pos_to_lc(start)
+            el, ec = pos_to_lc(min(i, n))
+            regions.append((sl, sc, el, ec))
+            continue
+
+        # String literals
+        if c in ('"', "'", "`"):
+            start = i
+            quote = c
+            i += 1
+            while i < n:
+                if source[i] == "\\" and i + 1 < n:
+                    i += 2  # skip escaped char
+                elif source[i] == quote:
+                    i += 1
+                    break
+                elif quote != "`" and source[i] == "\n":
+                    break  # unterminated single-line string
+                else:
+                    i += 1
+            sl, sc = pos_to_lc(start)
+            el, ec = pos_to_lc(min(i, n))
+            regions.append((sl, sc, el, ec))
+            continue
+
+        i += 1
 
     return regions
 

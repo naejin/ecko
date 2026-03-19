@@ -78,6 +78,17 @@ class TestPythonCustomChecks:
         assert code == 1
         assert "unicode-artifact" in output
 
+    def test_unicode_skips_js_strings(self):
+        code, output = run_ecko("unicode_in_js_strings.ts")
+        assert code == 0
+        assert "unicode-artifact" not in output
+
+    def test_unicode_detects_js_code(self):
+        code, output = run_ecko("unicode_in_js_code.ts")
+        assert code == 1
+        assert "unicode-artifact" in output
+        assert output.count("unicode-artifact") == 2
+
 
 class TestSuppression:
     def test_suppressed_echoes(self):
