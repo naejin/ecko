@@ -124,12 +124,10 @@ def _scan_js_skip_regions(source: str) -> list[tuple[int, int, int, int]]:
     with single, double, and backtick (template literal) delimiters.
     """
     regions: list[tuple[int, int, int, int]] = []
-    lines = source.splitlines()
-    line_offsets: list[int] = []
-    offset = 0
-    for line in lines:
-        line_offsets.append(offset)
-        offset += len(line) + 1  # +1 for newline
+    line_offsets: list[int] = [0]
+    for i, c in enumerate(source):
+        if c == '\n':
+            line_offsets.append(i + 1)
 
     def pos_to_lc(pos: int) -> tuple[int, int]:
         """Convert flat offset to (1-based line, 0-based col)."""

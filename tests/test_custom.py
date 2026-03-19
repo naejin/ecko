@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from checks.custom.banned_patterns import check_banned_patterns, check_obsolete_terms
@@ -346,16 +347,16 @@ class TestBannedPatternsRelativePath:
 class TestNormalizePath:
     def test_relative_path_made_absolute(self):
         result = _normalize_path("src/app.py", "/home/user/project")
-        assert result == "/home/user/project/src/app.py"
+        assert result == os.path.normpath("/home/user/project/src/app.py")
 
     def test_absolute_path_unchanged(self):
         result = _normalize_path("/home/user/project/src/app.py", "/home/user/project")
-        assert result == "/home/user/project/src/app.py"
+        assert result == os.path.normpath("/home/user/project/src/app.py")
 
     def test_dots_resolved(self):
         result = _normalize_path("src/../lib/app.py", "/home/user/project")
-        assert result == "/home/user/project/lib/app.py"
+        assert result == os.path.normpath("/home/user/project/lib/app.py")
 
     def test_trailing_slash_normalized(self):
         result = _normalize_path("src/app.py", "/home/user/project/")
-        assert result == "/home/user/project/src/app.py"
+        assert result == os.path.normpath("/home/user/project/src/app.py")

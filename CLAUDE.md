@@ -11,6 +11,8 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `checks/` — Python package: runner, config, result, formatter, tools/, custom/
 - `commands/` — slash commands (ping, status, setup)
 - `config/biome.json` — biome lint config (only ecko's rules enabled)
+- `scripts/` — install scripts (bash + powershell)
+- `tests/` — pytest suite with fixtures/
 
 ## Design constraints
 - Zero Python dependencies — config.py has a minimal YAML subset parser (no PyYAML)
@@ -18,6 +20,10 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - When binary != package (e.g. `tsc` from `typescript`), use `resolve_node_tool("tsc", package="typescript")`
 - Hook output goes to stderr (`result.emit()`) — that's how Claude Code reads it
 - Exit code 1 = echoes found (agent self-corrects), exit code 0 = clean
+- Noise filters live in adapters/custom checks, not in runner.py — filter at the source
+- Prose files (.md, .txt, .rst, .adoc, .rdoc) are skipped by unicode-artifact (em dashes are normal punctuation)
+- Pyright "could not be resolved" imports are filtered (missing deps, not code defects)
+- Vulture framework-injected params (`_ALWAYS_SKIP`) filtered everywhere; pytest fixtures (`_PYTEST_SKIP`) filtered only in test/conftest files
 
 ## Code style
 - All modules use `from __future__ import annotations`
@@ -34,6 +40,8 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 ## Testing
 - Smoke test: `python3 checks/runner.py --file <path> --mode post-tool-use --cwd <dir> --plugin-root .`
 - All imports: `python3 -c "from checks.runner import main"`
+- Stop mode: `python3 checks/runner.py --file <any> --mode stop --cwd <dir> --plugin-root .`
+- Run tests: `python3 -m pytest tests/`
 - Use temp files for testing checks (e.g., write a .py with unused imports, run runner, verify output)
 
 ## Not part of the plugin
