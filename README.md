@@ -1,5 +1,11 @@
 # ecko
 
+[![v0.1.0](https://img.shields.io/badge/version-0.1.0-blue)](https://github.com/naejin/ecko/releases/tag/v0.1.0)
+[![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-plugin-7c3aed)](https://docs.anthropic.com/en/docs/claude-code)
+[![Python](https://img.shields.io/badge/python-3.10+-3776ab?logo=python&logoColor=white)](https://python.org)
+[![TypeScript](https://img.shields.io/badge/typescript-supported-3178c6?logo=typescript&logoColor=white)](https://typescriptlang.org)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 **Deterministic code quality checks for AI agents.**
 
 Ecko echoes mistakes back to the agent at write-time so it self-corrects before you ever see the code. Three layers: silent auto-fix, per-file echoes, and deep analysis on stop.
