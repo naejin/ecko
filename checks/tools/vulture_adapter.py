@@ -9,9 +9,7 @@ from checks.result import Echo
 from checks.tools.resolve import resolve_python_tool
 
 # vulture output: path:line: unused function 'name' (confidence: 80%)
-VULTURE_PATTERN = re.compile(
-    r"^(.+?):(\d+):\s+(.+?)\s+\((\d+)% confidence\)$"
-)
+VULTURE_PATTERN = re.compile(r"^(.+?):(\d+):\s+(.+?)\s+\((\d+)% confidence\)$")
 
 
 def run_vulture(cwd: str) -> dict[str, list[Echo]]:

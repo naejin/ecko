@@ -144,7 +144,13 @@ def _parse_scalar(value: str) -> Any:
         value = value[: value.index("  #")].rstrip()
     # Strip quotes and process escapes
     if value.startswith('"') and value.endswith('"'):
-        return value[1:-1].replace("\\\\", "\x00").replace("\\n", "\n").replace("\\t", "\t").replace("\x00", "\\")
+        return (
+            value[1:-1]
+            .replace("\\\\", "\x00")
+            .replace("\\n", "\n")
+            .replace("\\t", "\t")
+            .replace("\x00", "\\")
+        )
     if value.startswith("'") and value.endswith("'"):
         return value[1:-1]
     if value.lower() == "true":

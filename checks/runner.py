@@ -19,7 +19,6 @@ from checks.config import (
     get_disabled_checks,
     get_exclude_patterns,
     get_obsolete_terms,
-    is_autofix_enabled,
     is_deep_enabled,
     load_config,
 )
@@ -81,6 +80,23 @@ def is_excluded(file_path: str, cwd: str, user_excludes: list[str]) -> bool:
     return False
 
 
+def _is_standalone_comment(line_text: str) -> bool:
+    """Check if a line is a standalone comment (not code with an inline comment).
+
+    Used to decide whether an ecko:ignore on the line above should apply to
+    the next line.  Standalone comments (``# ecko:ignore``, ``// ecko:ignore``)
+    suppress the line below; inline comments (``import os  # ecko:ignore``)
+    suppress only their own line.
+    """
+    stripped = line_text.lstrip()
+    return (
+        stripped.startswith("#")
+        or stripped.startswith("//")
+        or stripped.startswith("/*")
+        or stripped.startswith("<!--")
+    )
+
+
 def filter_suppressed(echoes: list[Echo], file_path: str) -> list[Echo]:
     """Remove echoes suppressed by inline ecko:ignore comments."""
     if not echoes or not os.path.isfile(file_path):
@@ -100,6 +116,14 @@ def filter_suppressed(echoes: list[Echo], file_path: str) -> list[Echo]:
             if 0 <= check_idx < len(lines):
                 line_text = lines[check_idx]
                 if "ecko:ignore" in line_text:
+                    # Line-above suppression only applies to standalone
+                    # comment lines.  Inline ignores (e.g.
+                    # ``import os  # ecko:ignore``) only suppress echoes
+                    # on their own line, not the line below.
+                    if check_idx == line_idx - 1 and not _is_standalone_comment(
+                        line_text
+                    ):
+                        continue
                     # Check if it's a targeted ignore
                     bracket_start = line_text.find("ecko:ignore[")
                     if bracket_start != -1:
@@ -108,9 +132,7 @@ def filter_suppressed(echoes: list[Echo], file_path: str) -> list[Echo]:
                             checks_str = line_text[
                                 bracket_start + len("ecko:ignore[") : bracket_end
                             ]
-                            ignored_checks = {
-                                c.strip() for c in checks_str.split(",")
-                            }
+                            ignored_checks = {c.strip() for c in checks_str.split(",")}
                             if echo.check in ignored_checks:
                                 suppressed = True
                     else:
@@ -169,7 +191,7 @@ def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
     if banned:
         from checks.custom.banned_patterns import check_banned_patterns
 
-        echoes.extend(check_banned_patterns(file_path, banned))
+        echoes.extend(check_banned_patterns(file_path, banned, cwd))
 
     # Obsolete terms
     obsolete = get_obsolete_terms(config)
@@ -188,6 +210,13 @@ def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
     return 0
 
 
+def _normalize_path(path: str, cwd: str) -> str:
+    """Normalize a file path to absolute, resolving relative paths against cwd."""
+    if os.path.isabs(path):
+        return os.path.normpath(path)
+    return os.path.normpath(os.path.join(cwd, path))
+
+
 def run_stop(cwd: str, plugin_root: str) -> int:
     """Run Layer 3 (deep analysis) + Layer 2 re-sweep on all modified files."""
     config = load_config(cwd)
@@ -196,17 +225,14 @@ def run_stop(cwd: str, plugin_root: str) -> int:
 
     # Find modified files, filtering excluded paths
     modified = [
-        f for f in _get_modified_files(cwd)
-        if not is_excluded(f, cwd, user_excludes)
+        f for f in _get_modified_files(cwd) if not is_excluded(f, cwd, user_excludes)
     ]
     if not modified:
         return 0
 
     py_files = [f for f in modified if detect_language(f) == "python"]
     ts_files = [
-        f
-        for f in modified
-        if detect_language(f) in ("typescript", "javascript")
+        f for f in modified if detect_language(f) in ("typescript", "javascript")
     ]
 
     all_echoes: dict[str, list[Echo]] = {}
@@ -219,28 +245,28 @@ def run_stop(cwd: str, plugin_root: str) -> int:
             from checks.tools.tsc_adapter import run_tsc
 
             for path, echoes in run_tsc(cwd).items():
-                all_echoes.setdefault(path, []).extend(echoes)
+                all_echoes.setdefault(_normalize_path(path, cwd), []).extend(echoes)
 
     # Python type checking
     if py_files and is_deep_enabled(config, "pyright"):
         from checks.tools.pyright_adapter import run_pyright
 
         for path, echoes in run_pyright(py_files, cwd).items():
-            all_echoes.setdefault(path, []).extend(echoes)
+            all_echoes.setdefault(_normalize_path(path, cwd), []).extend(echoes)
 
     # Python dead code
     if py_files and is_deep_enabled(config, "vulture"):
         from checks.tools.vulture_adapter import run_vulture
 
         for path, echoes in run_vulture(cwd).items():
-            all_echoes.setdefault(path, []).extend(echoes)
+            all_echoes.setdefault(_normalize_path(path, cwd), []).extend(echoes)
 
     # TypeScript unused exports
     if ts_files and is_deep_enabled(config, "knip"):
         from checks.tools.knip_adapter import run_knip
 
         for path, echoes in run_knip(cwd).items():
-            all_echoes.setdefault(path, []).extend(echoes)
+            all_echoes.setdefault(_normalize_path(path, cwd), []).extend(echoes)
 
     # --- Layer 2: Re-sweep all modified files ---
     for file_path in modified:
@@ -271,7 +297,7 @@ def run_stop(cwd: str, plugin_root: str) -> int:
         if banned:
             from checks.custom.banned_patterns import check_banned_patterns
 
-            echoes.extend(check_banned_patterns(file_path, banned))
+            echoes.extend(check_banned_patterns(file_path, banned, cwd))
 
         obsolete = get_obsolete_terms(config)
         if obsolete:
@@ -279,9 +305,8 @@ def run_stop(cwd: str, plugin_root: str) -> int:
 
             echoes.extend(check_obsolete_terms(file_path, obsolete))
 
-        echoes = filter_suppressed(echoes, file_path)
         if echoes:
-            all_echoes.setdefault(file_path, []).extend(echoes)
+            all_echoes.setdefault(_normalize_path(file_path, cwd), []).extend(echoes)
 
     # Deduplicate echoes per file (same check + line)
     for path in all_echoes:
@@ -294,12 +319,14 @@ def run_stop(cwd: str, plugin_root: str) -> int:
                 deduped.append(echo)
         all_echoes[path] = deduped
 
-    # Filter excluded paths (Layer 3 tools may report on files outside modified list)
+    # Apply suppression, exclusion, and disabled-check filters.
+    # This runs after all echoes (Layer 2 + Layer 3) are merged so that
+    # ecko:ignore comments work uniformly across all check sources.
     for path in list(all_echoes.keys()):
         if is_excluded(path, cwd, user_excludes):
             del all_echoes[path]
             continue
-        # Filter disabled checks
+        all_echoes[path] = filter_suppressed(all_echoes[path], path)
         all_echoes[path] = [e for e in all_echoes[path] if e.check not in disabled]
         if not all_echoes[path]:
             del all_echoes[path]

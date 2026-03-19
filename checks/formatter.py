@@ -15,10 +15,18 @@ def autofix(file_path: str, lang: str, config: dict[str, Any]) -> None:
         if is_autofix_enabled(config, "black"):
             _run_tool(resolve_python_tool("black"), "--quiet", file_path)
         if is_autofix_enabled(config, "isort"):
-            _run_tool(resolve_python_tool("isort"), "--quiet", "--profile", "black", file_path)
+            _run_tool(
+                resolve_python_tool("isort"), "--quiet", "--profile", "black", file_path
+            )
     elif lang in ("typescript", "javascript", "css", "json"):
         if is_autofix_enabled(config, "prettier"):
-            _run_tool(resolve_node_tool("prettier"), "--write", "--log-level", "silent", file_path)
+            _run_tool(
+                resolve_node_tool("prettier"),
+                "--write",
+                "--log-level",
+                "silent",
+                file_path,
+            )
 
     # Always strip trailing whitespace (no dependency needed)
     _strip_trailing_whitespace(file_path)
@@ -48,7 +56,7 @@ def _strip_trailing_whitespace(file_path: str) -> None:
         cleaned = []
         for line in lines:
             if line.endswith("\n"):
-                cleaned.append(line[: -1].rstrip() + "\n")
+                cleaned.append(line[:-1].rstrip() + "\n")
             else:
                 cleaned.append(line.rstrip())
         result = "".join(cleaned)

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import re
 import tokenize
-import io
 
 from checks.result import Echo
 
@@ -27,6 +27,15 @@ ARTIFACTS = {
 
 # Pattern matching any artifact character
 ARTIFACT_PATTERN = re.compile("[" + "".join(ARTIFACTS.keys()) + "]")
+
+# Python token types to skip (strings & comments).
+# Python 3.12+ tokenizes f-strings as FSTRING_START/MIDDLE/END instead of
+# a single STRING token, so we include those when available.
+_PY_SKIP_TOKENS = {tokenize.STRING, tokenize.COMMENT}
+for _attr in ("FSTRING_START", "FSTRING_MIDDLE", "FSTRING_END"):
+    _tok_type = getattr(tokenize, _attr, None)
+    if _tok_type is not None:
+        _PY_SKIP_TOKENS.add(_tok_type)
 
 
 def check_unicode_artifacts(file_path: str) -> list[Echo]:
@@ -69,9 +78,7 @@ def check_unicode_artifacts(file_path: str) -> list[Echo]:
     return echoes
 
 
-def _get_skip_regions(
-    file_path: str, source: str
-) -> list[tuple[int, int, int, int]]:
+def _get_skip_regions(file_path: str, source: str) -> list[tuple[int, int, int, int]]:
     """Get regions (start_line, start_col, end_line, end_col) that are strings or comments.
 
     Uses Python tokenizer for .py files, simple heuristics for others.
@@ -82,10 +89,8 @@ def _get_skip_regions(
         try:
             tokens = tokenize.generate_tokens(io.StringIO(source).readline)
             for tok in tokens:
-                if tok.type in (tokenize.STRING, tokenize.COMMENT):
-                    regions.append(
-                        (tok.start[0], tok.start[1], tok.end[0], tok.end[1])
-                    )
+                if tok.type in _PY_SKIP_TOKENS:
+                    regions.append((tok.start[0], tok.start[1], tok.end[0], tok.end[1]))
         except tokenize.TokenError:
             pass
     else:

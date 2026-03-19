@@ -19,7 +19,10 @@ def format_file_echoes(file_path: str, echoes: list[Echo]) -> str:
     if not echoes:
         return ""
     count = len(echoes)
-    lines = [f"~~ ecko ~~  {count} {'echo' if count == 1 else 'echoes'} in {file_path}", ""]
+    lines = [
+        f"~~ ecko ~~  {count} {'echo' if count == 1 else 'echoes'} in {file_path}",
+        "",
+    ]
     for i, echo in enumerate(echoes, 1):
         lines.append(f"  {i}. {echo.check} (line {echo.line})")
         lines.append(f"     {echo.message}")
@@ -46,7 +49,7 @@ def format_stop_echoes(file_echoes: dict[str, list[Echo]]) -> str:
             detail = echo.message
             if echo.suggestion:
                 detail += f" {echo.suggestion}"
-            lines.append(f"    {i}. {echo.check} (line {echo.line}) — {detail}")
+            lines.append(f"    {i}. {echo.check} (line {echo.line}) \u2014 {detail}")
             i += 1
         lines.append("")
     return "\n".join(lines)

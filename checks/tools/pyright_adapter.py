@@ -9,9 +9,7 @@ from checks.result import Echo
 from checks.tools.resolve import resolve_python_tool
 
 
-def run_pyright(
-    files: list[str], cwd: str
-) -> dict[str, list[Echo]]:
+def run_pyright(files: list[str], cwd: str) -> dict[str, list[Echo]]:
     """Run pyright on specified files. Returns echoes grouped by file."""
     cmd = resolve_python_tool("pyright")
     if not cmd:

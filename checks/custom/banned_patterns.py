@@ -10,7 +10,7 @@ from checks.result import Echo
 
 
 def check_banned_patterns(
-    file_path: str, patterns: list[dict[str, str]]
+    file_path: str, patterns: list[dict[str, str]], cwd: str = ""
 ) -> list[Echo]:
     """Check file against banned regex patterns from config."""
     try:
@@ -20,6 +20,12 @@ def check_banned_patterns(
         return []
 
     basename = os.path.basename(file_path)
+    rel_path = ""
+    if cwd:
+        try:
+            rel_path = os.path.relpath(file_path, cwd).replace(os.sep, "/")
+        except ValueError:
+            pass
     echoes: list[Echo] = []
 
     for rule in patterns:
@@ -30,9 +36,12 @@ def check_banned_patterns(
         if not pattern_str:
             continue
 
-        # Apply glob filter if specified
-        if glob_filter and not fnmatch.fnmatch(basename, glob_filter):
-            continue
+        # Apply glob filter if specified (match against basename and relative path)
+        if glob_filter:
+            if not fnmatch.fnmatch(basename, glob_filter) and not (
+                rel_path and fnmatch.fnmatch(rel_path, glob_filter)
+            ):
+                continue
 
         try:
             regex = re.compile(pattern_str)
@@ -52,9 +61,7 @@ def check_banned_patterns(
     return echoes
 
 
-def check_obsolete_terms(
-    file_path: str, terms: list[dict[str, str]]
-) -> list[Echo]:
+def check_obsolete_terms(file_path: str, terms: list[dict[str, str]]) -> list[Echo]:
     """Check file for obsolete terms that should be renamed."""
     try:
         with open(file_path) as f:

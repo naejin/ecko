@@ -8,7 +8,8 @@ from checks.custom.banned_patterns import check_banned_patterns, check_obsolete_
 from checks.custom.duplicate_keys import check_duplicate_keys
 from checks.custom.unicode_artifacts import check_unicode_artifacts
 from checks.custom.unreachable_code import check_unreachable_code
-from checks.runner import is_excluded
+from checks.result import Echo
+from checks.runner import _is_standalone_comment, _normalize_path, filter_suppressed, is_excluded
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -80,6 +81,13 @@ class TestUnicodeArtifacts:
 
     def test_clean_file(self):
         echoes = check_unicode_artifacts(str(FIXTURES / "clean.py"))
+        assert echoes == []
+
+    def test_skips_python_fstrings(self, tmp_path):
+        """Unicode inside Python f-string literals should be skipped (3.12+ tokenizer)."""
+        f = tmp_path / "fstr.py"
+        f.write_text('x = 42\nmsg = f"value: {x} \u2014 done"\n')
+        echoes = check_unicode_artifacts(str(f))
         assert echoes == []
 
 
@@ -173,3 +181,181 @@ class TestIsExcluded:
 
     def test_user_exclude_no_false_match(self):
         assert not is_excluded("/proj/src/app.ts", "/proj", ["generated/*"])
+
+
+class TestFilterSuppressed:
+    """Tests for the ecko:ignore suppression logic."""
+
+    def test_inline_ignore_does_not_leak(self, tmp_path):
+        """An inline ecko:ignore should NOT suppress the next line."""
+        f = tmp_path / "test.py"
+        f.write_text("import os  # ecko:ignore\nimport sys\n")
+        echoes = [
+            Echo(check="unused-imports", line=1, message="os unused"),
+            Echo(check="unused-imports", line=2, message="sys unused"),
+        ]
+        filtered = filter_suppressed(echoes, str(f))
+        assert len(filtered) == 1
+        assert filtered[0].line == 2
+
+    def test_standalone_comment_suppresses_next_line(self, tmp_path):
+        """A standalone # ecko:ignore comment should suppress the line below."""
+        f = tmp_path / "test.py"
+        f.write_text("# ecko:ignore\nimport os\nimport sys\n")
+        echoes = [
+            Echo(check="unused-imports", line=2, message="os unused"),
+            Echo(check="unused-imports", line=3, message="sys unused"),
+        ]
+        filtered = filter_suppressed(echoes, str(f))
+        assert len(filtered) == 1
+        assert filtered[0].line == 3
+
+    def test_targeted_inline_ignore_does_not_leak(self, tmp_path):
+        """An inline ecko:ignore[check] should NOT suppress the next line."""
+        f = tmp_path / "test.py"
+        f.write_text("import os  # ecko:ignore[unused-imports]\nimport sys\n")
+        echoes = [
+            Echo(check="unused-imports", line=1, message="os unused"),
+            Echo(check="unused-imports", line=2, message="sys unused"),
+        ]
+        filtered = filter_suppressed(echoes, str(f))
+        assert len(filtered) == 1
+        assert filtered[0].line == 2
+
+    def test_standalone_targeted_ignore_suppresses_next_line(self, tmp_path):
+        """A standalone # ecko:ignore[check] should suppress the line below."""
+        f = tmp_path / "test.py"
+        f.write_text("# ecko:ignore[unused-imports]\nimport os\nimport sys\n")
+        echoes = [
+            Echo(check="unused-imports", line=2, message="os unused"),
+            Echo(check="unused-imports", line=3, message="sys unused"),
+        ]
+        filtered = filter_suppressed(echoes, str(f))
+        assert len(filtered) == 1
+        assert filtered[0].line == 3
+
+    def test_js_standalone_comment_suppresses(self, tmp_path):
+        """A standalone // ecko:ignore should suppress the next line in JS/TS."""
+        f = tmp_path / "test.ts"
+        f.write_text("// ecko:ignore\nvar x = 1;\nvar y = 2;\n")
+        echoes = [
+            Echo(check="var-declarations", line=2, message="use let"),
+            Echo(check="var-declarations", line=3, message="use let"),
+        ]
+        filtered = filter_suppressed(echoes, str(f))
+        assert len(filtered) == 1
+        assert filtered[0].line == 3
+
+    def test_js_inline_ignore_does_not_leak(self, tmp_path):
+        """An inline // ecko:ignore in JS should NOT suppress the next line."""
+        f = tmp_path / "test.ts"
+        f.write_text("var x = 1; // ecko:ignore\nvar y = 2;\n")
+        echoes = [
+            Echo(check="var-declarations", line=1, message="use let"),
+            Echo(check="var-declarations", line=2, message="use let"),
+        ]
+        filtered = filter_suppressed(echoes, str(f))
+        assert len(filtered) == 1
+        assert filtered[0].line == 2
+
+    def test_inline_ignore_still_suppresses_own_line(self, tmp_path):
+        """An inline ecko:ignore should still suppress its own line."""
+        f = tmp_path / "test.py"
+        f.write_text("import os  # ecko:ignore\nimport sys\n")
+        echoes = [
+            Echo(check="unused-imports", line=1, message="os unused"),
+        ]
+        filtered = filter_suppressed(echoes, str(f))
+        assert len(filtered) == 0
+
+
+class TestIsStandaloneComment:
+    def test_python_hash_comment(self):
+        assert _is_standalone_comment("# ecko:ignore\n")
+
+    def test_python_indented_comment(self):
+        assert _is_standalone_comment("    # ecko:ignore\n")
+
+    def test_js_double_slash(self):
+        assert _is_standalone_comment("// ecko:ignore\n")
+
+    def test_css_block_comment(self):
+        assert _is_standalone_comment("/* ecko:ignore */\n")
+
+    def test_html_comment(self):
+        assert _is_standalone_comment("<!-- ecko:ignore -->\n")
+
+    def test_inline_code_is_not_standalone(self):
+        assert not _is_standalone_comment("import os  # ecko:ignore\n")
+
+    def test_js_inline_is_not_standalone(self):
+        assert not _is_standalone_comment("var x = 1; // ecko:ignore\n")
+
+
+class TestBannedPatternsRelativePath:
+    def test_glob_matches_relative_path(self, tmp_path):
+        """Glob patterns like 'src/*.tsx' should match against relative paths."""
+        src = tmp_path / "src"
+        src.mkdir()
+        f = src / "app.tsx"
+        f.write_text('<div className="bg-blue-500">hello</div>\n')
+        patterns = [
+            {"pattern": r"bg-blue-\d+", "glob": "src/*.tsx", "message": "bad"}
+        ]
+        echoes = check_banned_patterns(str(f), patterns, cwd=str(tmp_path))
+        assert len(echoes) == 1
+
+    def test_basename_glob_still_works_with_cwd(self, tmp_path):
+        """Simple basename globs should still work when cwd is provided."""
+        src = tmp_path / "src"
+        src.mkdir()
+        f = src / "app.tsx"
+        f.write_text('<div className="bg-blue-500">hello</div>\n')
+        patterns = [
+            {"pattern": r"bg-blue-\d+", "glob": "*.tsx", "message": "bad"}
+        ]
+        echoes = check_banned_patterns(str(f), patterns, cwd=str(tmp_path))
+        assert len(echoes) == 1
+
+    def test_relative_glob_no_false_match(self, tmp_path):
+        """A glob like 'src/*.tsx' should not match files outside src/."""
+        lib = tmp_path / "lib"
+        lib.mkdir()
+        f = lib / "app.tsx"
+        f.write_text('<div className="bg-blue-500">hello</div>\n')
+        patterns = [
+            {"pattern": r"bg-blue-\d+", "glob": "src/*.tsx", "message": "bad"}
+        ]
+        echoes = check_banned_patterns(str(f), patterns, cwd=str(tmp_path))
+        assert len(echoes) == 0
+
+    def test_no_cwd_falls_back_to_basename(self, tmp_path):
+        """Without cwd, only basename matching should be used (backward compat)."""
+        src = tmp_path / "src"
+        src.mkdir()
+        f = src / "app.tsx"
+        f.write_text('<div className="bg-blue-500">hello</div>\n')
+        patterns = [
+            {"pattern": r"bg-blue-\d+", "glob": "src/*.tsx", "message": "bad"}
+        ]
+        # No cwd — should fall back to basename-only matching
+        echoes = check_banned_patterns(str(f), patterns)
+        assert len(echoes) == 0  # "src/*.tsx" doesn't match basename "app.tsx"
+
+
+class TestNormalizePath:
+    def test_relative_path_made_absolute(self):
+        result = _normalize_path("src/app.py", "/home/user/project")
+        assert result == "/home/user/project/src/app.py"
+
+    def test_absolute_path_unchanged(self):
+        result = _normalize_path("/home/user/project/src/app.py", "/home/user/project")
+        assert result == "/home/user/project/src/app.py"
+
+    def test_dots_resolved(self):
+        result = _normalize_path("src/../lib/app.py", "/home/user/project")
+        assert result == "/home/user/project/lib/app.py"
+
+    def test_trailing_slash_normalized(self):
+        result = _normalize_path("src/app.py", "/home/user/project/")
+        assert result == "/home/user/project/src/app.py"

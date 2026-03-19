@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import os
-import tempfile
-
 from checks.config import (
     _parse_yaml_subset,
     get_banned_patterns,

@@ -1,4 +1,4 @@
-# ecko.yaml — project-level configuration for the ecko plugin
+# ecko.yaml - project-level configuration for the ecko plugin
 # Place this file in your project root to customize behavior.
 
 # Auto-fix settings (Layer 1)
@@ -15,13 +15,15 @@ deep_analysis:
   vulture: true              # default: true (if installed)
   knip: true                 # default: true (if installed)
 
-# Custom rules — banned regex patterns
+# Custom rules - banned regex patterns
+# glob: matches against both the file basename and the path relative to
+# the project root, so "*.tsx" and "src/components/*.tsx" both work.
 banned_patterns:
   - pattern: "bg-(blue|red|green)-\\d+"
     glob: "*.tsx"
     message: "Use brand color utilities instead of raw Tailwind colors"
 
-# Obsolete terms — flag old names that should be renamed
+# Obsolete terms - flag old names that should be renamed
 obsolete_terms:
   - old: "UserProfile"
     new: "Account"
