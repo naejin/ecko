@@ -30,9 +30,19 @@ Clean code = silence. Problems = echoes.
 
 ## Install
 
+First, add the marketplace (one-time):
+
 ```bash
-claude plugin add naejin/ecko
+claude plugin marketplace add naejin/monet-plugins
 ```
+
+Then install ecko:
+
+```bash
+claude plugin install ecko
+```
+
+Restart your Claude Code session for the hooks to take effect.
 
 All external tools (ruff, black, biome, etc.) are **optional**. Ecko gracefully skips anything not installed and still runs what's available. Use `/ecko:setup` to install tools, or `/ecko:status` to see what you have.
 
