@@ -53,7 +53,7 @@ def check_unicode_artifacts(file_path: str) -> list[Echo]:
         return []
 
     try:
-        with open(file_path) as f:
+        with open(file_path, encoding="utf-8") as f:
             source = f.read()
     except (OSError, UnicodeDecodeError):
         return []
