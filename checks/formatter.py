@@ -2,36 +2,35 @@
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 from typing import Any
 
 from checks.config import is_autofix_enabled
+from checks.tools.resolve import resolve_node_tool, resolve_python_tool
 
 
 def autofix(file_path: str, lang: str, config: dict[str, Any]) -> None:
     """Run auto-fix tools on the file. Modifies in-place, no output."""
     if lang == "python":
         if is_autofix_enabled(config, "black"):
-            _run_if_available("black", "--quiet", file_path)
+            _run_tool(resolve_python_tool("black"), "--quiet", file_path)
         if is_autofix_enabled(config, "isort"):
-            _run_if_available("isort", "--quiet", "--profile", "black", file_path)
+            _run_tool(resolve_python_tool("isort"), "--quiet", "--profile", "black", file_path)
     elif lang in ("typescript", "javascript", "css", "json"):
         if is_autofix_enabled(config, "prettier"):
-            _run_if_available("prettier", "--write", "--log-level", "silent", file_path)
+            _run_tool(resolve_node_tool("prettier"), "--write", "--log-level", "silent", file_path)
 
     # Always strip trailing whitespace (no dependency needed)
     _strip_trailing_whitespace(file_path)
 
 
-def _run_if_available(tool: str, *args: str) -> None:
-    """Run a tool if it's on PATH. Silently skip if not found."""
-    path = shutil.which(tool)
-    if not path:
+def _run_tool(cmd: list[str] | None, *args: str) -> None:
+    """Run a resolved tool command. Silently skip if not available."""
+    if not cmd:
         return
     try:
         subprocess.run(
-            [path, *args],
+            [*cmd, *args],
             capture_output=True,
             text=True,
             timeout=30,

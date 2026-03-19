@@ -3,21 +3,21 @@
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 
 from checks.result import Echo
+from checks.tools.resolve import resolve_node_tool
 
 
 def run_knip(cwd: str) -> dict[str, list[Echo]]:
     """Run knip for unused exports/imports detection. Returns echoes grouped by file."""
-    npx = shutil.which("npx")
-    if not npx:
+    cmd = resolve_node_tool("knip")
+    if not cmd:
         return {}
 
     try:
         result = subprocess.run(
-            [npx, "knip", "--reporter", "json"],
+            [*cmd, "--reporter", "json"],
             capture_output=True,
             text=True,
             cwd=cwd,

@@ -43,16 +43,6 @@ irm https://raw.githubusercontent.com/naejin/ecko/main/scripts/install.ps1 | iex
 </details>
 
 <details>
-<summary>With external tools (ruff, black, biome, etc.)</summary>
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/naejin/ecko/main/scripts/install.sh | bash -s -- --with-tools
-```
-
-This auto-detects your package managers (`uv` > `pipx` > `pip` for Python, `npm` > `pnpm` for Node) and installs all supported tools. You can also use `--python-only` or `--node-only`.
-</details>
-
-<details>
 <summary>Manual install</summary>
 
 ```bash
@@ -63,7 +53,7 @@ claude plugin install ecko
 
 Restart your Claude Code session for the hooks to take effect.
 
-All external tools are **optional** — ecko gracefully skips anything not installed. Use `/ecko:setup` inside a session to install tools interactively, or `/ecko:status` to see what you have.
+**No tool installation needed.** Ecko auto-runs tools via [`uvx`](https://docs.astral.sh/uv) (Python tools) and [`npx`](https://docs.npmjs.com/cli/commands/npx) (Node tools) — no global installs, no environment pollution. If you already have tools installed locally, ecko uses those first.
 
 ## How It Works
 
@@ -188,19 +178,19 @@ if x == None:  # ecko:ignore[singleton-comparison]
 
 ## Tools
 
-| Tool | Layer | Install |
-|------|-------|---------|
-| [black](https://github.com/psf/black) | auto-fix | `pip install black` |
-| [isort](https://github.com/PyCQA/isort) | auto-fix | `pip install isort` |
-| [prettier](https://github.com/prettier/prettier) | auto-fix | `npm i -g prettier` |
-| [ruff](https://github.com/astral-sh/ruff) | echoes | `pip install ruff` |
-| [biome](https://github.com/biomejs/biome) | echoes | `npm i -g @biomejs/biome` |
-| [tsc](https://github.com/microsoft/TypeScript) | deep | `npm i -g typescript` |
-| [pyright](https://github.com/microsoft/pyright) | deep | `pip install pyright` |
-| [vulture](https://github.com/jendrikseipp/vulture) | deep | `pip install vulture` |
-| [knip](https://github.com/webpro-nl/knip) | deep | runs via `npx` |
+| Tool | Layer | Resolved via |
+|------|-------|-------------|
+| [black](https://github.com/psf/black) | auto-fix | `uvx` / `pipx run` / PATH |
+| [isort](https://github.com/PyCQA/isort) | auto-fix | `uvx` / `pipx run` / PATH |
+| [prettier](https://github.com/prettier/prettier) | auto-fix | `npx` / PATH |
+| [ruff](https://github.com/astral-sh/ruff) | echoes | `uvx` / `pipx run` / PATH |
+| [biome](https://github.com/biomejs/biome) | echoes | `npx` / PATH |
+| [tsc](https://github.com/microsoft/TypeScript) | deep | `npx` / PATH |
+| [pyright](https://github.com/microsoft/pyright) | deep | `uvx` / `pipx run` / PATH |
+| [vulture](https://github.com/jendrikseipp/vulture) | deep | `uvx` / `pipx run` / PATH |
+| [knip](https://github.com/webpro-nl/knip) | deep | `npx` / PATH |
 
-All optional. Each layer runs what's available and skips what's missing.
+All tools are resolved automatically — no manual installation required. Ecko checks PATH first (uses your local install if present), then falls back to `uvx`/`npx` which download and cache tools on demand.
 
 ## License
 

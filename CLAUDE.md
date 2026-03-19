@@ -14,7 +14,8 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 
 ## Design constraints
 - Zero Python dependencies — config.py has a minimal YAML subset parser (no PyYAML)
-- All external tools (ruff, biome, black, etc.) are optional — skip via `shutil.which()`
+- Tools auto-resolve via `checks/tools/resolve.py`: PATH first → `uvx`/`pipx run` (Python) → `npx`/`pnpx` (Node)
+- When binary != package (e.g. `tsc` from `typescript`), use `resolve_node_tool("tsc", package="typescript")`
 - Hook output goes to stderr (`result.emit()`) — that's how Claude Code reads it
 - Exit code 1 = echoes found (agent self-corrects), exit code 0 = clean
 
@@ -23,7 +24,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Check names are kebab-case: `unused-imports`, `unicode-artifact`, `dead-code`
 - Tool adapters follow a pattern: `run_<tool>(args) -> list[Echo]` (per-file) or `-> dict[str, list[Echo]]` (multi-file)
 - Custom checks follow: `check_<name>(file_path) -> list[Echo]`
-- Graceful skip: `shutil.which(tool)` returns None → return empty list, never error
+- Graceful skip: resolver returns None → return empty list, never error. Never call `shutil.which()` directly in adapters.
 
 ## Adding a new check
 - Tool adapter: add `checks/tools/<name>_adapter.py`, wire into `runner.py` per-file or stop mode

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 
 from checks.result import Echo
+from checks.tools.resolve import resolve_python_tool
 
 # Ruff rules we check
 RUFF_RULES = "F401,E711,E712,E722,F403,B006,A001,A002,S110"
@@ -27,14 +27,14 @@ RULE_MAP = {
 
 def run_ruff(file_path: str) -> list[Echo]:
     """Run ruff on a file and return echoes."""
-    ruff = shutil.which("ruff")
-    if not ruff:
+    cmd = resolve_python_tool("ruff")
+    if not cmd:
         return []
 
     try:
         result = subprocess.run(
             [
-                ruff,
+                *cmd,
                 "check",
                 "--select",
                 RUFF_RULES,

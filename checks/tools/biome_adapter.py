@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 
 from checks.result import Echo
+from checks.tools.resolve import resolve_node_tool
 
 # Map biome rule names to ecko check names
 RULE_MAP = {
@@ -23,8 +23,8 @@ RULE_MAP = {
 
 def run_biome(file_path: str, plugin_root: str) -> list[Echo]:
     """Run biome on a file and return echoes."""
-    biome = shutil.which("biome")
-    if not biome:
+    cmd = resolve_node_tool("biome", package="@biomejs/biome")
+    if not cmd:
         return []
 
     config_path = os.path.join(plugin_root, "config")
@@ -32,7 +32,7 @@ def run_biome(file_path: str, plugin_root: str) -> list[Echo]:
     try:
         result = subprocess.run(
             [
-                biome,
+                *cmd,
                 "lint",
                 "--config-path",
                 config_path,

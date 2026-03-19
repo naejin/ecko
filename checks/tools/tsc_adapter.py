@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import re
-import shutil
 import subprocess
 
 from checks.result import Echo
+from checks.tools.resolve import resolve_node_tool
 
 # tsc error format: path(line,col): error TSxxxx: message
 TSC_PATTERN = re.compile(r"^(.+?)\((\d+),(\d+)\):\s+error\s+TS\d+:\s+(.+)$")
@@ -14,13 +14,13 @@ TSC_PATTERN = re.compile(r"^(.+?)\((\d+),(\d+)\):\s+error\s+TS\d+:\s+(.+)$")
 
 def run_tsc(cwd: str) -> dict[str, list[Echo]]:
     """Run tsc --noEmit in the project root. Returns echoes grouped by file."""
-    tsc = shutil.which("tsc")
-    if not tsc:
+    cmd = resolve_node_tool("tsc", package="typescript")
+    if not cmd:
         return {}
 
     try:
         result = subprocess.run(
-            [tsc, "--noEmit"],
+            [*cmd, "--noEmit"],
             capture_output=True,
             text=True,
             cwd=cwd,

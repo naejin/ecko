@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import re
-import shutil
 import subprocess
 
 from checks.result import Echo
+from checks.tools.resolve import resolve_python_tool
 
 # vulture output: path:line: unused function 'name' (confidence: 80%)
 VULTURE_PATTERN = re.compile(
@@ -16,13 +16,13 @@ VULTURE_PATTERN = re.compile(
 
 def run_vulture(cwd: str) -> dict[str, list[Echo]]:
     """Run vulture with 80% confidence threshold. Returns echoes grouped by file."""
-    vulture = shutil.which("vulture")
-    if not vulture:
+    cmd = resolve_python_tool("vulture")
+    if not cmd:
         return {}
 
     try:
         result = subprocess.run(
-            [vulture, ".", "--min-confidence", "80"],
+            [*cmd, ".", "--min-confidence", "80"],
             capture_output=True,
             text=True,
             cwd=cwd,
