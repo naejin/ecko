@@ -43,6 +43,9 @@ def run_pyright(files: list[str], cwd: str) -> dict[str, list[Echo]]:
             continue
         path = diag.get("file", "")
         message = diag.get("message", "")
+        # Skip unresolved imports — indicates missing deps, not code defects.
+        if "could not be resolved" in message:
+            continue
         line = diag.get("range", {}).get("start", {}).get("line", 0)
         # pyright uses 0-indexed lines
         line += 1

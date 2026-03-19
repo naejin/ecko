@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 import re
 import tokenize
 
@@ -38,8 +39,19 @@ for _attr in ("FSTRING_START", "FSTRING_MIDDLE", "FSTRING_END"):
         _PY_SKIP_TOKENS.add(_tok_type)
 
 
+# Prose extensions where em dashes, smart quotes, etc. are normal punctuation.
+_PROSE_EXTENSIONS = {".md", ".txt", ".rst", ".adoc", ".rdoc"}
+
+# JS/TS family — use the JS string/comment scanner.
+_JS_EXTENSIONS = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".css", ".json", ".jsonc"}
+
+
 def check_unicode_artifacts(file_path: str) -> list[Echo]:
     """Scan file for unicode artifacts, skipping string literals and comments."""
+    _, ext = os.path.splitext(file_path)
+    if ext.lower() in _PROSE_EXTENSIONS:
+        return []
+
     try:
         with open(file_path) as f:
             source = f.read()
@@ -85,7 +97,8 @@ def _get_skip_regions(file_path: str, source: str) -> list[tuple[int, int, int, 
     """
     regions: list[tuple[int, int, int, int]] = []
 
-    if file_path.endswith(".py") or file_path.endswith(".pyi"):
+    lp = file_path.lower()
+    if lp.endswith(".py") or lp.endswith(".pyi"):
         try:
             tokens = tokenize.generate_tokens(io.StringIO(source).readline)
             for tok in tokens:
@@ -94,7 +107,11 @@ def _get_skip_regions(file_path: str, source: str) -> list[tuple[int, int, int, 
         except tokenize.TokenError:
             pass
     else:
-        regions = _scan_js_skip_regions(source)
+        _, ext = os.path.splitext(lp)
+        if ext in _JS_EXTENSIONS:
+            regions = _scan_js_skip_regions(source)
+        else:
+            regions = _scan_hash_skip_regions(source)
 
     return regions
 
@@ -175,6 +192,40 @@ def _scan_js_skip_regions(source: str) -> list[tuple[int, int, int, int]]:
 
         i += 1
 
+    return regions
+
+
+def _scan_hash_skip_regions(source: str) -> list[tuple[int, int, int, int]]:
+    """Scan source for #-style line comments and basic string literals.
+
+    Used for shell scripts, YAML, TOML, and other non-JS/non-Python files.
+    """
+    regions: list[tuple[int, int, int, int]] = []
+    for line_num, line in enumerate(source.splitlines(), 1):
+        i = 0
+        n = len(line)
+        while i < n:
+            c = line[i]
+            # String literal — skip to avoid treating # inside strings as comments
+            if c in ('"', "'"):
+                start = i
+                quote = c
+                i += 1
+                while i < n:
+                    if line[i] == "\\" and i + 1 < n:
+                        i += 2
+                    elif line[i] == quote:
+                        i += 1
+                        break
+                    else:
+                        i += 1
+                regions.append((line_num, start, line_num, i))
+                continue
+            # Hash comment — rest of line is a comment
+            if c == "#":
+                regions.append((line_num, i, line_num, n))
+                break
+            i += 1
     return regions
 
 
