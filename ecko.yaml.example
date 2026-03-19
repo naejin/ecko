@@ -1,0 +1,35 @@
+# ecko.yaml — project-level configuration for the ecko plugin
+# Place this file in your project root to customize behavior.
+
+# Auto-fix settings (Layer 1)
+autofix:
+  enabled: true              # default: true
+  black: true                # default: true (if installed)
+  isort: true                # default: true (if installed)
+  prettier: true             # default: true (if installed)
+
+# Deep analysis settings (Layer 3)
+deep_analysis:
+  tsc: true                  # default: true (if tsconfig.json exists)
+  pyright: true              # default: true (if installed)
+  vulture: true              # default: true (if installed)
+  knip: true                 # default: true (if installed)
+
+# Custom rules — banned regex patterns
+banned_patterns:
+  - pattern: "bg-(blue|red|green)-\\d+"
+    glob: "*.tsx"
+    message: "Use brand color utilities instead of raw Tailwind colors"
+
+# Obsolete terms — flag old names that should be renamed
+obsolete_terms:
+  - old: "UserProfile"
+    new: "Account"
+
+# Disable specific built-in checks (by ecko check name)
+# Available checks: unused-imports, singleton-comparison, bare-except,
+#   star-imports, mutable-default-args, builtin-shadowing, empty-error-handlers,
+#   unreachable-code, debugger-statements, var-declarations, duplicate-keys,
+#   useless-catch, unicode-artifact, banned-pattern, obsolete-term,
+#   type-error, dead-code, unused-file, unused-export
+disabled_checks: []

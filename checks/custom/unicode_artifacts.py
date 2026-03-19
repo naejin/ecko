@@ -1,0 +1,118 @@
+"""Custom check: unicode artifacts from LLM output or copy-paste."""
+
+from __future__ import annotations
+
+import re
+import tokenize
+import io
+
+from checks.result import Echo
+
+# Characters that shouldn't appear in source code
+ARTIFACTS = {
+    "\u2014": "Em dash (\u2014)",
+    "\u2013": "En dash (\u2013)",
+    "\u201c": "Left double smart quote (\u201c)",
+    "\u201d": "Right double smart quote (\u201d)",
+    "\u2018": "Left single smart quote (\u2018)",
+    "\u2019": "Right single smart quote (\u2019)",
+    "\u200b": "Zero-width space",
+    "\u200c": "Zero-width non-joiner",
+    "\u200d": "Zero-width joiner",
+    "\ufeff": "Byte order mark",
+    "\u00a0": "Non-breaking space",
+    "\u2003": "Em space",
+    "\u2002": "En space",
+}
+
+# Pattern matching any artifact character
+ARTIFACT_PATTERN = re.compile("[" + "".join(ARTIFACTS.keys()) + "]")
+
+
+def check_unicode_artifacts(file_path: str) -> list[Echo]:
+    """Scan file for unicode artifacts, skipping string literals and comments."""
+    try:
+        with open(file_path) as f:
+            source = f.read()
+    except (OSError, UnicodeDecodeError):
+        return []
+
+    if not ARTIFACT_PATTERN.search(source):
+        return []
+
+    lines = source.splitlines()
+    # Determine which line regions are strings/comments to skip
+    skip_regions = _get_skip_regions(file_path, source)
+
+    echoes: list[Echo] = []
+    seen_lines: set[int] = set()
+
+    for line_num, line in enumerate(lines, 1):
+        for match in ARTIFACT_PATTERN.finditer(line):
+            col = match.start()
+            if _in_skip_region(line_num, col, skip_regions):
+                continue
+            if line_num in seen_lines:
+                continue
+            seen_lines.add(line_num)
+            char = match.group()
+            name = ARTIFACTS.get(char, f"Unicode U+{ord(char):04X}")
+            echoes.append(
+                Echo(
+                    check="unicode-artifact",
+                    line=line_num,
+                    message=f"{name} found in source code. Likely from copy-pasting LLM output.",
+                    suggestion="Replace with the ASCII equivalent.",
+                )
+            )
+
+    return echoes
+
+
+def _get_skip_regions(
+    file_path: str, source: str
+) -> list[tuple[int, int, int, int]]:
+    """Get regions (start_line, start_col, end_line, end_col) that are strings or comments.
+
+    Uses Python tokenizer for .py files, simple heuristics for others.
+    """
+    regions: list[tuple[int, int, int, int]] = []
+
+    if file_path.endswith(".py") or file_path.endswith(".pyi"):
+        try:
+            tokens = tokenize.generate_tokens(io.StringIO(source).readline)
+            for tok in tokens:
+                if tok.type in (tokenize.STRING, tokenize.COMMENT):
+                    regions.append(
+                        (tok.start[0], tok.start[1], tok.end[0], tok.end[1])
+                    )
+        except tokenize.TokenError:
+            pass
+    else:
+        # For non-Python files, skip lines that look like string content or comments
+        # This is a conservative heuristic
+        lines = source.splitlines()
+        for i, line in enumerate(lines, 1):
+            stripped = line.lstrip()
+            if stripped.startswith("//") or stripped.startswith("#"):
+                regions.append((i, 0, i, len(line)))
+
+    return regions
+
+
+def _in_skip_region(
+    line: int, col: int, regions: list[tuple[int, int, int, int]]
+) -> bool:
+    """Check if a position is within a skip region."""
+    for start_line, start_col, end_line, end_col in regions:
+        if start_line == end_line:
+            if line == start_line and start_col <= col < end_col:
+                return True
+        else:
+            if line == start_line and col >= start_col:
+                return True
+            if start_line < line < end_line:
+                return True
+            if line == end_line and col < end_col:
+                return True
+    return False

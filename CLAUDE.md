@@ -1,0 +1,40 @@
+# Ecko — Claude Code Plugin
+
+## What this is
+A Claude Code plugin providing deterministic code quality checks via hooks.
+Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysis on stop (Layer 3).
+
+## Structure
+- `.claude-plugin/plugin.json` — plugin manifest
+- `hooks/hooks.json` — PostToolUse(Write|Edit) + Stop hook wiring
+- `hooks/*.sh` — shell entry points that delegate to `checks/runner.py`
+- `checks/` — Python package: runner, config, result, formatter, tools/, custom/
+- `commands/` — slash commands (ping, status, setup)
+- `config/biome.json` — biome lint config (only ecko's rules enabled)
+
+## Design constraints
+- Zero Python dependencies — config.py has a minimal YAML subset parser (no PyYAML)
+- All external tools (ruff, biome, black, etc.) are optional — skip via `shutil.which()`
+- Hook output goes to stderr (`result.emit()`) — that's how Claude Code reads it
+- Exit code 1 = echoes found (agent self-corrects), exit code 0 = clean
+
+## Code style
+- All modules use `from __future__ import annotations`
+- Check names are kebab-case: `unused-imports`, `unicode-artifact`, `dead-code`
+- Tool adapters follow a pattern: `run_<tool>(args) -> list[Echo]` (per-file) or `-> dict[str, list[Echo]]` (multi-file)
+- Custom checks follow: `check_<name>(file_path) -> list[Echo]`
+- Graceful skip: `shutil.which(tool)` returns None → return empty list, never error
+
+## Adding a new check
+- Tool adapter: add `checks/tools/<name>_adapter.py`, wire into `runner.py` per-file or stop mode
+- Custom check: add `checks/custom/<name>.py`, wire into `runner.py` under Layer 2
+- Register the check name in `ecko.yaml.example` disabled_checks comment
+
+## Testing
+- Smoke test: `python3 checks/runner.py --file <path> --mode post-tool-use --cwd <dir> --plugin-root .`
+- All imports: `python3 -c "from checks.runner import main"`
+- Use temp files for testing checks (e.g., write a .py with unused imports, run runner, verify output)
+
+## Not part of the plugin
+- `docs/ideas/` — internal ideation (gitignored)
+- `openspec/`, `.claude/` — dev workflow tooling, not distributed
