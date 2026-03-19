@@ -60,25 +60,32 @@ def run_biome(file_path: str, plugin_root: str) -> list[Echo]:
     for diag in diagnostics:
         rule_name = ""
         category = diag.get("category", "")
-        # biome category format: "lint/ruleName" or "lint/group/ruleName"
+        # biome category format: "lint/group/ruleName"
         if "/" in category:
             rule_name = category.rsplit("/", 1)[-1]
 
-        check = RULE_MAP.get(rule_name, rule_name)
+        check = RULE_MAP.get(rule_name)
+        if not check:
+            continue
+
         message = diag.get("description", "") or diag.get("message", "")
         # Extract line number from location
         line = 0
         location = diag.get("location", {})
-        span = location.get("span", {})
-        if isinstance(span, list) and span:
-            # biome gives byte offsets — approximate line from sourceCode
-            source = location.get("sourceCode", "")
-            offset = span[0] if isinstance(span[0], int) else 0
-            line = source[:offset].count("\n") + 1 if source else 0
-        elif isinstance(span, dict):
-            line = span.get("start", {}).get("line", 0)
+        # v2 format: location.start.line / location.start.column
+        start = location.get("start")
+        if isinstance(start, dict):
+            line = start.get("line", 0)
+        else:
+            # v1 fallback: span-based
+            span = location.get("span", {})
+            if isinstance(span, list) and span:
+                source = location.get("sourceCode", "")
+                offset = span[0] if isinstance(span[0], int) else 0
+                line = source[:offset].count("\n") + 1 if source else 0
+            elif isinstance(span, dict):
+                line = span.get("start", {}).get("line", 0)
 
-        if check:
-            echoes.append(Echo(check=check, line=line, message=str(message)))
+        echoes.append(Echo(check=check, line=line, message=str(message)))
 
     return echoes
