@@ -1,0 +1,110 @@
+# Changelog
+
+## v0.3.1
+
+### Bug fixes
+
+- **Fix Windows CI failures** — 5 test failures on `windows-latest` resolved:
+  - `TestNormalizePath` (4 tests): Wrapped expected values in `os.path.normpath()` so assertions use platform-correct path separators
+  - `TestUnicodeArtifacts::test_js_mixed_strings_and_code` (1 test): Fixed `open()` call to use `encoding="utf-8"` — on Windows Python 3.10/3.12, the default cp1252 encoding cannot decode byte `0x9d` from UTF-8 smart quotes, causing a silent `UnicodeDecodeError`
+- **Fix CRLF line offset calculation** in `_scan_js_skip_regions` — replaced LF-only offset loop with one that scans raw source for `\n`, correct for both LF and CRLF line endings
+
+## v0.3.0
+
+Three noise-reduction filters that eliminate the most common false positives across all repos.
+
+### Skip unicode-artifact check on prose files
+
+Em dashes, smart quotes, and other Unicode punctuation are normal in markdown and documentation. The `unicode-artifact` check now skips `.md`, `.txt`, `.rst`, `.adoc`, and `.rdoc` files entirely. A new hash-comment-aware scanner also correctly handles `#`-style comments in shell scripts, YAML, and TOML — artifacts inside comments are no longer flagged.
+
+### Filter pyright unresolved import errors
+
+When dependencies aren't installed (the common case for code review), pyright floods output with `Import "X" could not be resolved` errors. These are now filtered — real type errors (attribute access, type mismatches, unknown symbols) still come through.
+
+### Filter vulture framework-injected parameters
+
+Protocol parameters (`exc_type`, `exc_val`, `exc_tb` from `__exit__`; `signum`, `frame` from signal handlers) are filtered everywhere. Pytest built-in fixtures (`tmp_path`, `capsys`, `monkeypatch`, etc.) are filtered only in `test_*`, `*_test.py`, and `conftest.py` files — the same names in non-test code are still flagged. Fixture definitions in conftest files (`unused function 'fixture_name'`) are also handled.
+
+## v0.2.0
+
+### Bug fixes
+
+- **Fix suppression leak** — `ecko:ignore` on line N no longer silently suppresses line N+1. Inline ignores (`import os  # ecko:ignore`) now only apply to their own line. Standalone comment ignores (`# ecko:ignore` on its own line) still correctly suppress the line below.
+- **Fix stop hook path duplication** — Layer 3 tools returned relative paths while Layer 2 used absolute paths, causing the same file to appear twice in the final sweep output. All paths are now normalized before merging.
+- **Fix Layer 3 suppression bypass** — `ecko:ignore` comments previously only worked on Layer 2 echoes. Suppression now applies uniformly across all layers.
+- **Fix banned_patterns glob matching basename only** — `glob: "src/*.tsx"` silently matched nothing. Globs now match against both the file basename and the path relative to the project root.
+- **Fix unicode false positive on Python 3.12+ f-strings** — The Python 3.12 tokenizer emits `FSTRING_START`/`FSTRING_MIDDLE`/`FSTRING_END` instead of a single `STRING` token, causing unicode artifacts inside f-string literals to be incorrectly flagged.
+
+### Tests
+
+30 new tests (83 → 113): suppression leak scenarios, standalone comment detection, stop mode, autofix, banned_patterns relative path globs, path normalization, f-string unicode skip.
+
+## v0.1.2
+
+### Fixes
+
+- **Unicode artifact false positives** — JS/TS/CSS/JSON files no longer flag unicode inside string literals, template literals, or comments. Replaced the naive line-comment heuristic with a proper state-machine scanner that tracks `//`, `/* */`, `"`, `'`, and `` ` `` regions with column-level precision.
+- **Unterminated block comments** — an unclosed `/*` no longer silently suppresses all unicode checks for the rest of the file.
+
+### New
+
+- **Path exclusions** — `fixtures`, `__fixtures__`, `__snapshots__`, `vendor`, `node_modules`, `.git`, `dist`, `build`, and `__pycache__` directories are now automatically excluded from all checks at any depth.
+- **User-configurable `exclude`** — add custom glob patterns in `ecko.yaml` to skip project-specific paths:
+  ```yaml
+  exclude:
+    - "generated/*"
+    - "*.min.js"
+  ```
+
+### Tests
+
+83 total (22 new) — covering the unicode scanner, path exclusions, and integration tests.
+
+## v0.1.1
+
+### Zero-install tool resolution
+
+Tools now auto-resolve via `uvx` (Python) and `npx` (Node) — no global installs needed. If you already have tools installed locally, ecko uses those first.
+
+Resolution order: PATH → `uvx`/`pipx run` → `npx`/`pnpx`
+
+### Biome v2 support
+
+Updated biome config and adapter for biome v2 schema. Only ecko's configured rules are reported.
+
+### Cross-platform install scripts
+
+```bash
+# Linux/macOS
+curl -fsSL https://raw.githubusercontent.com/naejin/ecko/main/scripts/install.sh | bash
+
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/naejin/ecko/main/scripts/install.ps1 | iex
+```
+
+### Test suite & CI
+
+61 tests covering config parser, result formatter, tool resolver, custom checks, and full integration. CI runs on `{ubuntu, macos, windows} × {Python 3.10, 3.12}`.
+
+## v0.1.0
+
+Initial release — deterministic code quality checks for AI agents. Echoes back mistakes at write-time so the agent self-corrects before the developer ever sees the code.
+
+### Three-layer architecture
+
+- **Layer 1 (Silent auto-fix):** black, isort, prettier, trailing whitespace removal
+- **Layer 2 (Echoes):** ruff (9 rules), biome (7 rules), plus custom AST checks for duplicate dict keys, unreachable code, unicode artifacts, and banned patterns
+- **Layer 3 (Deep analysis):** tsc, pyright, vulture, knip + Layer 2 re-sweep on all modified files
+
+### Slash commands
+
+- `/ecko:ping [file]` — manually trigger checks on a file
+- `/ecko:status` — show installed tools and config
+- `/ecko:setup` — install missing tools
+
+### Key design decisions
+
+- Zero Python dependencies — minimal YAML subset parser, no PyYAML needed
+- All external tools optional — gracefully skips anything not installed
+- Inline suppression — `# ecko:ignore` or `# ecko:ignore[check-name]`
+- Project config — `ecko.yaml` for banned patterns, obsolete terms, disabling checks
