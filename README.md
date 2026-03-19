@@ -30,21 +30,40 @@ Clean code = silence. Problems = echoes.
 
 ## Install
 
-First, add the marketplace (one-time):
+```bash
+curl -fsSL https://raw.githubusercontent.com/naejin/ecko/main/scripts/install.sh | bash
+```
+
+<details>
+<summary>Windows (PowerShell)</summary>
+
+```powershell
+irm https://raw.githubusercontent.com/naejin/ecko/main/scripts/install.ps1 | iex
+```
+</details>
+
+<details>
+<summary>With external tools (ruff, black, biome, etc.)</summary>
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/naejin/ecko/main/scripts/install.sh | bash -s -- --with-tools
+```
+
+This auto-detects your package managers (`uv` > `pipx` > `pip` for Python, `npm` > `pnpm` for Node) and installs all supported tools. You can also use `--python-only` or `--node-only`.
+</details>
+
+<details>
+<summary>Manual install</summary>
 
 ```bash
 claude plugin marketplace add naejin/monet-plugins
-```
-
-Then install ecko:
-
-```bash
 claude plugin install ecko
 ```
+</details>
 
 Restart your Claude Code session for the hooks to take effect.
 
-All external tools (ruff, black, biome, etc.) are **optional**. Ecko gracefully skips anything not installed and still runs what's available. Use `/ecko:setup` to install tools, or `/ecko:status` to see what you have.
+All external tools are **optional** — ecko gracefully skips anything not installed. Use `/ecko:setup` inside a session to install tools interactively, or `/ecko:status` to see what you have.
 
 ## How It Works
 
