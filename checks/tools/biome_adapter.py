@@ -27,7 +27,7 @@ def run_biome(file_path: str, plugin_root: str) -> list[Echo]:
     if not cmd:
         return []
 
-    config_path = os.path.join(plugin_root, "config")
+    config_path = os.path.normpath(os.path.join(plugin_root, "config"))
 
     try:
         result = subprocess.run(
