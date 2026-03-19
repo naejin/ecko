@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 .cache/
+.pytest_cache/
 docs/ideas/
 openspec/
 .claude/

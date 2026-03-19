@@ -1,0 +1,117 @@
+"""Tests for the config parser."""
+
+from __future__ import annotations
+
+import os
+import tempfile
+
+from checks.config import (
+    _parse_yaml_subset,
+    get_banned_patterns,
+    get_disabled_checks,
+    get_obsolete_terms,
+    is_autofix_enabled,
+    is_deep_enabled,
+    load_config,
+)
+
+
+class TestParseYamlSubset:
+    def test_scalar_values(self):
+        result = _parse_yaml_subset("key: value\ncount: 42\nenabled: true")
+        assert result["key"] == "value"
+        assert result["count"] == 42
+        assert result["enabled"] is True
+
+    def test_false_and_null(self):
+        result = _parse_yaml_subset("a: false\nb: null")
+        assert result["a"] is False
+        assert result["b"] is None
+
+    def test_nested_mapping(self):
+        result = _parse_yaml_subset("autofix:\n  black: true\n  isort: false")
+        assert result["autofix"]["black"] is True
+        assert result["autofix"]["isort"] is False
+
+    def test_list_of_strings(self):
+        result = _parse_yaml_subset("items:\n  - one\n  - two\n  - three")
+        assert result["items"] == ["one", "two", "three"]
+
+    def test_list_of_dicts(self):
+        text = "patterns:\n  - pattern: \"foo\"\n    glob: \"*.py\"\n  - pattern: \"bar\""
+        result = _parse_yaml_subset(text)
+        assert len(result["patterns"]) == 2
+        assert result["patterns"][0]["pattern"] == "foo"
+        assert result["patterns"][0]["glob"] == "*.py"
+        assert result["patterns"][1]["pattern"] == "bar"
+
+    def test_comments_ignored(self):
+        result = _parse_yaml_subset("# comment\nkey: value  # inline")
+        assert result["key"] == "value"
+
+    def test_empty_list(self):
+        result = _parse_yaml_subset("items: []")
+        assert result["items"] == []
+
+    def test_quoted_strings(self):
+        result = _parse_yaml_subset('name: "hello world"\nalt: \'single\'')
+        assert result["name"] == "hello world"
+        assert result["alt"] == "single"
+
+    def test_escape_sequences_in_double_quotes(self):
+        result = _parse_yaml_subset('pattern: "foo\\\\d+"')
+        assert result["pattern"] == "foo\\d+"
+
+    def test_empty_string(self):
+        result = _parse_yaml_subset("")
+        assert result == {}
+
+
+class TestLoadConfig:
+    def test_missing_file_returns_empty(self, tmp_path):
+        assert load_config(str(tmp_path)) == {}
+
+    def test_loads_file(self, tmp_path):
+        config_file = tmp_path / "ecko.yaml"
+        config_file.write_text("autofix:\n  black: false\n")
+        result = load_config(str(tmp_path))
+        assert result["autofix"]["black"] is False
+
+
+class TestConfigHelpers:
+    def test_disabled_checks(self):
+        config = {"disabled_checks": ["unused-imports", "bare-except"]}
+        assert get_disabled_checks(config) == {"unused-imports", "bare-except"}
+
+    def test_disabled_checks_empty(self):
+        assert get_disabled_checks({}) == set()
+
+    def test_autofix_enabled_default(self):
+        assert is_autofix_enabled({}, "black") is True
+
+    def test_autofix_disabled_globally(self):
+        config = {"autofix": {"enabled": False}}
+        assert is_autofix_enabled(config, "black") is False
+
+    def test_autofix_disabled_per_tool(self):
+        config = {"autofix": {"enabled": True, "black": False}}
+        assert is_autofix_enabled(config, "black") is False
+
+    def test_deep_enabled_default(self):
+        assert is_deep_enabled({}, "tsc") is True
+
+    def test_deep_disabled(self):
+        config = {"deep_analysis": {"tsc": False}}
+        assert is_deep_enabled(config, "tsc") is False
+
+    def test_banned_patterns(self):
+        config = {"banned_patterns": [{"pattern": "foo", "glob": "*.py"}]}
+        patterns = get_banned_patterns(config)
+        assert len(patterns) == 1
+        assert patterns[0]["pattern"] == "foo"
+
+    def test_obsolete_terms(self):
+        config = {"obsolete_terms": [{"old": "Foo", "new": "Bar"}]}
+        terms = get_obsolete_terms(config)
+        assert len(terms) == 1
+        assert terms[0]["old"] == "Foo"
