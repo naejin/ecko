@@ -18,6 +18,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 
 ## Design constraints
 - Zero Python dependencies — config.py has a minimal YAML subset parser (no PyYAML)
+- YAML parser `_parse_list_block` supports nested lists via `last_empty_key` tracking — highest-risk code path, add regression tests for any changes (test all config sections parse correctly after edits)
 - Tools auto-resolve via `checks/tools/resolve.py`: PATH first → `uvx`/`pipx run` (Python) → `npx`/`pnpx` (Node)
 - When binary != package (e.g. `tsc` from `typescript`), use `resolve_node_tool("tsc", package="typescript")`
 - Hook output goes to stderr (`result.emit()`) — that's how Claude Code reads it
@@ -29,6 +30,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Vulture yield-after-raise filtered in both custom check and vulture adapter (generator protocol pattern)
 - Builtin-shadowing filtered by configurable allowlist in ruff adapter (20-name default)
 - Echo cap per check per file applied in result formatters, not in runner — cap is display-only, doesn't affect detection
+- Config values (`shadow_allowlist`, `echo_cap`, `import_rules`) computed once before file loops in runner.py — never inside per-file loops (same config, no need to recompute)
 - Test file detection is filename-only (`test_*.py`, `*_test.py`, `conftest.py`) — never directory-based (avoids running test checks on `tests/helpers.py`)
 - AST checks on test functions use `_iter_test_functions` (module + class level only) — never `ast.walk(tree)` which finds nested `test_*`-prefixed helpers
 - `.pyi` type stubs are skipped from all linting (they exist for type checkers, not runtime)
@@ -79,9 +81,10 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Bash guard: `echo 'COMMAND' | python3 checks/runner.py --mode pre-tool-use-bash --cwd . --plugin-root .` (exit 2 = block, 0 = allow)
 - Test fixtures in `tests/fixtures/` must NOT start with `test_` prefix unless they are intentionally bad test files (conftest.py `collect_ignore_glob` excludes them)
 - Real-world validation: clone repos to `/tmp/`, run checks via `check_test_quality()` or `run_post_tool_use()` directly, assess TP/FP rates
-- Validation results: `docs/ideas/validation-results.md` (52 repos tested — 42 from v0.4.0, 10 from v0.5.0 pre-validation)
+- Validation results: `docs/ideas/validation-results.md` (52 repos + v0.5.0 release validation)
 - 10-repo validation command: `python3 checks/runner.py --file /tmp/ecko-test-{repo}/{file} --mode post-tool-use --cwd /tmp/ecko-test-{repo} --plugin-root /home/daylon/projects/ecko`
 - 10-repo validation suite: Flask, FastAPI, httpx, Rich, Click, Pydantic, Express, Preact, Zod, Chalk
+- Stop-mode validation: copy source to tmp dir, `git init` + commit all, modify files (append newline), then run `--mode stop`. Must copy WITHOUT `.git` dir (`shutil.copytree` with `ignore_patterns('.git')`) or nested git confuses `_get_modified_files()`
 - Use parallel subagents for multi-repo validation (5 agents x 2 repos each works well)
 - CI matrix: `{ubuntu, macos, windows} × {Python 3.10, 3.12}` — 6 jobs total (`.github/workflows/test.yml`)
 
@@ -90,7 +93,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Update version badge in `README.md`
 - Add entry to `CHANGELOG.md`
 - Push and wait for CI green on all 6 matrix jobs before tagging
-- Tag, push tag, `gh release create`
+- Tag, push tag, `gh release create v{X} --title "..." --notes-file /tmp/release-notes.md` (flag is `-F`/`--notes-file`, NOT `--body`)
 - Verify with: `curl -fsSL https://raw.githubusercontent.com/naejin/ecko/main/scripts/install.sh | bash`
 
 ## Current version and next milestone
