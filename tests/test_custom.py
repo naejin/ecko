@@ -124,6 +124,24 @@ class TestBannedPatterns:
         echoes = check_banned_patterns("/some/file.py", [])
         assert echoes == []
 
+    def test_redos_search_does_not_hang(self, tmp_path):
+        """Pathological regex at search time should timeout, not hang."""
+        import time
+
+        f = tmp_path / "test.py"
+        # Input that triggers catastrophic backtracking: 'a' * N + '!'
+        # The '!' forces the engine to exhaust all 2^N prefix splits.
+        f.write_text("a" * 25 + "!\n")
+        patterns = [
+            {"pattern": r"(a+)+b", "message": "ReDoS search test"}
+        ]
+        start = time.monotonic()
+        echoes = check_banned_patterns(str(f), patterns)
+        elapsed = time.monotonic() - start
+        assert echoes == []  # No match (timeout → skip)
+        # Must complete within 3s (timeout is 500ms + thread overhead)
+        assert elapsed < 5.0, f"ReDoS guard too slow: {elapsed:.1f}s"
+
 
 class TestObsoleteTerms:
     def test_detects_term(self, tmp_path):

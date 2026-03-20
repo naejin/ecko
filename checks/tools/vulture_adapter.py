@@ -8,7 +8,7 @@ import os
 import re
 import subprocess
 
-from checks.result import Echo
+from checks.result import Echo, emit
 from checks.tools.resolve import resolve_python_tool
 
 # vulture output: path:line: unused function 'name' (80% confidence)
@@ -83,18 +83,37 @@ def _is_yield_after_raise(path: str, lineno: int) -> bool:
     return False
 
 
-_fixture_cache: dict[str, set[str]] = {}
+_fixture_cache: dict[str, tuple[list[str], float, set[str]]] = {}
 
 
 def _collect_fixture_names(cwd: str) -> set[str]:
     """Scan conftest.py files for @pytest.fixture decorated function names.
 
-    Results are cached per cwd to avoid redundant AST parsing.
+    Results are cached per cwd and invalidated when conftest.py files are
+    added, removed, or modified (detected via path list + mtime comparison).
     """
+
+    def _max_mtime(paths: list[str]) -> float:
+        mt = 0.0
+        for p in paths:
+            try:
+                mt = max(mt, os.path.getmtime(p))
+            except OSError:
+                pass
+        return mt
+
+    # Always glob (cheap stat scan) — needed to detect new/removed conftest files
+    conftest_paths = sorted(glob.glob(os.path.join(cwd, "**", "conftest.py"), recursive=True))
+    max_mtime = _max_mtime(conftest_paths)
+
+    # Warm path: return cache if path list and mtimes are unchanged
     if cwd in _fixture_cache:
-        return _fixture_cache[cwd]
+        cached_paths, cached_mtime, cached_names = _fixture_cache[cwd]
+        if cached_paths == conftest_paths and max_mtime <= cached_mtime:
+            return cached_names
+
     names: set[str] = set()
-    for path in glob.glob(os.path.join(cwd, "**", "conftest.py"), recursive=True):
+    for path in conftest_paths:
         try:
             with open(path, encoding="utf-8") as f:
                 source = f.read()
@@ -105,7 +124,7 @@ def _collect_fixture_names(cwd: str) -> set[str]:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 if _has_fixture_decorator(node):
                     names.add(node.name)
-    _fixture_cache[cwd] = names
+    _fixture_cache[cwd] = (conftest_paths, max_mtime, names)
     return names
 
 
@@ -140,7 +159,11 @@ def run_vulture(
             cwd=cwd,
             timeout=60,
         )
-    except (subprocess.TimeoutExpired, OSError):
+    except subprocess.TimeoutExpired:
+        emit("~~ ecko ~~ warning: vulture timed out (60s limit)\n")
+        return {}
+    except OSError as exc:
+        emit(f"~~ ecko ~~ warning: vulture failed: {exc}\n")
         return {}
 
     output = result.stdout.strip()

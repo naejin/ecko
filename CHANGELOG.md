@@ -1,5 +1,51 @@
 # Changelog
 
+## v0.6.0
+
+Transparency & trust — when ecko runs, users always know what happened. Silent failures are gone, duplicate code is eliminated, and tool adapters have unit tests.
+
+### Transparency (P0 — 6/10 agent consensus)
+
+- **Adapter-level failure reporting** — all 6 tool adapters (ruff, biome, pyright, tsc, knip, vulture) now separately catch `TimeoutExpired` vs `OSError` and emit `~~ ecko ~~ warning: {tool} timed out on {file} ({N}s limit)` or `~~ ecko ~~ warning: {tool} failed: {error}` to stderr. Users always know when a check didn't run.
+- **Thread pool error reporting** — `run_stop()` no longer silently swallows exceptions from Layer 3 futures. Failed tools emit `~~ ecko ~~ warning: {tool} failed during deep analysis: {error}`.
+- **Hook JSON parse failure reporting** — `pre_tool_use_bash.sh` and `post_tool_use.sh` now emit a warning to stderr on JSON parse failure instead of silently producing an empty string.
+- **Skipped-tool install hints** — instead of `ruff (not found)`, ecko now emits `ruff not found — try: pip install ruff (or uvx ruff)` with tool-specific install suggestions.
+- **Echo cap transparency** — when echoes are capped, output now includes `(capped at N per check — set echo_cap_per_check: 0 in ecko.yaml to see all)` so users understand the limit is configurable.
+
+### Architecture (P1 — 4/10 agent consensus)
+
+- **Extracted Layer 2 dispatch** — `_run_layer2_checks()` replaces ~80 lines of duplicated check dispatch logic that existed in both `run_post_tool_use()` and `run_stop()`. New checks now only need to be added in one place.
+
+### UX wins
+
+- **Import-layer line numbers** — `check_import_layers` now reports the actual line number of the violating import (via AST node for Python, regex match offset for JS/TS) instead of `line=0`.
+- **`.test-d.ts` exclusion** — tsd type assertion files are now skipped from all linting, fixing known false positives on TypeScript repos like Chalk.
+- **Bash guard: full-path bypass protection** — patterns now match `/bin/rm`, `/usr/bin/rm`, `command rm`, `\rm`, and `git -C /path push --force` variants.
+- **ReDoS: `re.compile()` protected** — user-supplied regex in `banned_patterns` is now compiled inside the same timeout protection as `re.search()`. A pathological regex like `(a+)+b` can no longer hang at compile time.
+- **Bash guard block messages** — blocked commands already showed the reason (e.g., "use --force-with-lease instead"), but git commands with `-C /path` prefix are now caught too.
+
+### Test coverage (P1 — 3/10 agent consensus)
+
+- **New `tests/test_tool_adapters.py`** — 30 unit tests covering output parsing for all 6 tool adapters: JSON parsing, allowlist filtering, timeout/crash warning emission, edge cases (empty output, invalid JSON, unresolved tools).
+- **Bash guard tests** — bypass variants (`/bin/rm`, `\rm`, `command rm`, `git -C`), `git push -f` short form, `--force-with-lease` combined ordering, multiple `-C` flags.
+- **Import-layer line number tests** — multiline Python + JS, commented-out JS import skipping, block comment skipping.
+- **ReDoS tests** — pathological regex `(a+)+b` tested in both bash guard and banned_patterns with wall-clock assertions.
+- **285 total tests** (234 → 285, +51 new).
+
+### Config UX
+
+- **Effective config in `/ecko:status`** — status command now shows computed effective config including defaults: echo_cap, shadow_allowlist size, disabled_checks, exclude patterns, import_rules count, blocked_commands count, and reverb status.
+
+### Bug fixes
+
+- **Pyright resolver mismatch** — `run_stop()` used `resolve_node_tool("pyright")` but the adapter uses `resolve_python_tool("pyright")`. This caused pyright to silently not run when installed via pip/uvx. Fixed to use `resolve_python_tool`.
+- **`git push -f` not blocked** — the `-f` short form for `--force` was not caught by the bash guard. Now matched alongside `--force`.
+- **`--force-with-lease --force` false positive** — combining both flags in any order was incorrectly blocked. Now uses a command-wide negative lookahead so `--force-with-lease` anywhere in the command prevents blocking.
+- **JS import-layer false positives from comments** — commented-out imports (`// import ...` and `/* import ... */`) were incorrectly flagged. Now skipped via `_is_in_js_comment()` heuristic.
+- **`_walk_shallow` O(n^2)** — `list.pop(0)` in the BFS queue replaced with `collections.deque.popleft()` for O(1) per operation.
+- **Fixture cache stale on new conftests** — `_fixture_cache` could not detect newly added `conftest.py` files. Now re-globs and compares path lists on each invocation.
+- **Regex compile cache** — `_safe_regex_compile()` now caches compiled patterns by string, avoiding redundant thread spawns across files.
+
 ## v0.5.1
 
 Trust, safety, and performance — based on independent consensus from 10 code review agents.

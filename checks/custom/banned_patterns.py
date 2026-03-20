@@ -26,6 +26,33 @@ def _safe_regex_search(pattern: re.Pattern[str], text: str) -> bool:
     return False if t.is_alive() else result[0]
 
 
+_compiled_cache: dict[str, re.Pattern[str] | None] = {}
+
+
+def _safe_regex_compile(pattern_str: str, timeout_ms: int = 500) -> re.Pattern[str] | None:
+    """Compile a regex with a timeout to guard against ReDoS at compile time.
+
+    Results are cached by pattern string — each unique pattern is compiled at most once.
+    """
+    if pattern_str in _compiled_cache:
+        return _compiled_cache[pattern_str]
+
+    result: list[re.Pattern[str] | None] = [None]
+
+    def _compile() -> None:
+        try:
+            result[0] = re.compile(pattern_str)
+        except re.error:
+            result[0] = None
+
+    t = threading.Thread(target=_compile, daemon=True)
+    t.start()
+    t.join(timeout=timeout_ms / 1000.0)
+    compiled = None if t.is_alive() else result[0]
+    _compiled_cache[pattern_str] = compiled
+    return compiled
+
+
 def check_banned_patterns(
     file_path: str, patterns: list[dict[str, str]], cwd: str = ""
 ) -> list[Echo]:
@@ -60,9 +87,8 @@ def check_banned_patterns(
             ):
                 continue
 
-        try:
-            regex = re.compile(pattern_str)
-        except re.error:
+        regex = _safe_regex_compile(pattern_str)
+        if regex is None:
             continue
 
         for line_num, line in enumerate(lines, 1):

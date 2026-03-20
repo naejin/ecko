@@ -20,6 +20,7 @@ class TestImportLayersPython:
         assert len(echoes) == 1
         assert echoes[0].check == "import-layer"
         assert "repositories" in echoes[0].message
+        assert echoes[0].line == 1
 
     def test_file_no_match_glob(self, tmp_path):
         f = tmp_path / "utils" / "helper.py"
@@ -60,6 +61,19 @@ class TestImportLayersPython:
         checks = {e.message for e in echoes}
         assert any("repositories" in m for m in checks)
         assert any("sqlalchemy" in m for m in checks)
+        # Line numbers should be > 0 (not the old line=0 default)
+        for e in echoes:
+            assert e.line > 0
+
+    def test_line_numbers_multiline(self, tmp_path):
+        """Line numbers should correspond to actual import positions."""
+        f = tmp_path / "routes" / "handler.py"
+        f.parent.mkdir()
+        f.write_text("import os\nimport json\nfrom repositories import base\n", encoding="utf-8")
+        rules = [{"files": "routes/*.py", "deny_import": ["repositories"], "message": "bad"}]
+        echoes = check_import_layers(str(f), rules, str(tmp_path))
+        assert len(echoes) == 1
+        assert echoes[0].line == 3  # third line
 
 
 class TestImportLayersJS:
@@ -70,6 +84,7 @@ class TestImportLayersJS:
         rules = [{"files": "routes/*.ts", "deny_import": ["repositories"], "message": "bad"}]
         echoes = check_import_layers(str(f), rules, str(tmp_path))
         assert len(echoes) == 1
+        assert echoes[0].line == 1
 
     def test_js_no_false_prefix(self, tmp_path):
         f = tmp_path / "routes" / "api.ts"
@@ -86,6 +101,48 @@ class TestImportLayersJS:
         rules = [{"files": "routes/*.js", "deny_import": ["repositories"], "message": "bad"}]
         echoes = check_import_layers(str(f), rules, str(tmp_path))
         assert len(echoes) == 1
+        assert echoes[0].line == 1
+
+    def test_js_line_numbers_multiline(self, tmp_path):
+        """JS import line numbers should correspond to actual positions."""
+        f = tmp_path / "routes" / "api.ts"
+        f.parent.mkdir()
+        f.write_text(
+            "import express from 'express';\n"
+            "import helmet from 'helmet';\n"
+            "import { db } from 'repositories/db';\n",
+            encoding="utf-8",
+        )
+        rules = [{"files": "routes/*.ts", "deny_import": ["repositories"], "message": "bad"}]
+        echoes = check_import_layers(str(f), rules, str(tmp_path))
+        assert len(echoes) == 1
+        assert echoes[0].line == 3
+
+    def test_js_commented_import_skipped(self, tmp_path):
+        """Commented-out imports should not trigger import-layer echoes."""
+        f = tmp_path / "routes" / "api.ts"
+        f.parent.mkdir()
+        f.write_text(
+            "// import { db } from 'repositories/db';\n"
+            "import express from 'express';\n",
+            encoding="utf-8",
+        )
+        rules = [{"files": "routes/*.ts", "deny_import": ["repositories"], "message": "bad"}]
+        echoes = check_import_layers(str(f), rules, str(tmp_path))
+        assert echoes == []
+
+    def test_js_block_comment_import_skipped(self, tmp_path):
+        """Imports inside block comments should not trigger echoes."""
+        f = tmp_path / "routes" / "api.ts"
+        f.parent.mkdir()
+        f.write_text(
+            "/* import { db } from 'repositories/db'; */\n"
+            "import express from 'express';\n",
+            encoding="utf-8",
+        )
+        rules = [{"files": "routes/*.ts", "deny_import": ["repositories"], "message": "bad"}]
+        echoes = check_import_layers(str(f), rules, str(tmp_path))
+        assert echoes == []
 
 
 class TestImportRulesConfig:

@@ -6,7 +6,7 @@ import json
 import os
 import subprocess
 
-from checks.result import Echo
+from checks.result import Echo, emit
 from checks.tools.resolve import resolve_node_tool
 
 # Map biome rule names to ecko check names
@@ -43,7 +43,11 @@ def run_biome(file_path: str, plugin_root: str) -> list[Echo]:
             text=True,
             timeout=30,
         )
-    except (subprocess.TimeoutExpired, OSError):
+    except subprocess.TimeoutExpired:
+        emit(f"~~ ecko ~~ warning: biome timed out on {file_path} (30s limit)\n")
+        return []
+    except OSError as exc:
+        emit(f"~~ ecko ~~ warning: biome failed: {exc}\n")
         return []
 
     output = result.stdout.strip()

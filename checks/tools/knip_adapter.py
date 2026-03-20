@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 
-from checks.result import Echo
+from checks.result import Echo, emit
 from checks.tools.resolve import resolve_node_tool
 
 
@@ -23,7 +23,11 @@ def run_knip(cwd: str) -> dict[str, list[Echo]]:
             cwd=cwd,
             timeout=60,
         )
-    except (subprocess.TimeoutExpired, OSError):
+    except subprocess.TimeoutExpired:
+        emit("~~ ecko ~~ warning: knip timed out (60s limit)\n")
+        return {}
+    except OSError as exc:
+        emit(f"~~ ecko ~~ warning: knip failed: {exc}\n")
         return {}
 
     output = result.stdout.strip()

@@ -19,7 +19,7 @@ Steps:
    - Number of obsolete terms
    - Disabled checks
 
-3. Display a formatted status report like:
+3. Show the **effective config** including defaults, so users know what's active:
 
 ```
 ~~ ecko status ~~
@@ -44,6 +44,15 @@ Config: ecko.yaml found
   Disabled checks: none
   Banned patterns: 2
   Obsolete terms: 1
+
+Effective config:
+  echo_cap_per_check: 5 (default)
+  builtin_shadow_allowlist: [type, help, input, ...] (20 items, default)
+  disabled_checks: [] (none)
+  exclude: [fixtures/*, node_modules/*] + built-in defaults
+  import_rules: 0 rules
+  blocked_commands: 0 user patterns (+ 6 built-in)
+  reverb: disabled
 ```
 
 Missing tools are fine — ecko gracefully skips them. Suggest `/ecko:setup` if many tools are missing.

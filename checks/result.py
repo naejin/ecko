@@ -14,6 +14,9 @@ class Echo:
     suggestion: str = ""
 
 
+_CAP_ADVICE = "capped at {cap} per check — set echo_cap_per_check: 0 in ecko.yaml to see all"
+
+
 def _cap_echoes(
     echoes: list[Echo], echo_cap: int
 ) -> tuple[list[Echo], dict[str, int]]:
@@ -53,6 +56,7 @@ def format_file_echoes(
     for check, count in overflow.items():
         lines.append(f"  ... and {count} more {check}")
     if overflow:
+        lines.append(f"  ({_CAP_ADVICE.format(cap=echo_cap)})")
         lines.append("")
     return "\n".join(lines)
 
@@ -81,6 +85,8 @@ def format_stop_echoes(
             i += 1
         for check, count in overflow.items():
             lines.append(f"    ... and {count} more {check}")
+        if overflow:
+            lines.append(f"    ({_CAP_ADVICE.format(cap=echo_cap)})")
         lines.append("")
     return "\n".join(lines)
 

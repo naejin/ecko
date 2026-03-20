@@ -71,6 +71,11 @@ def _is_test_file(file_path: str) -> bool:
     )
 
 
+def _is_skippable_stub(file_path: str) -> bool:
+    """Check if a file is a type stub or tsd assertion file that should skip linting."""
+    return file_path.endswith(".pyi") or file_path.endswith(".test-d.ts")
+
+
 def is_excluded(file_path: str, cwd: str, user_excludes: list[str]) -> bool:
     """Check if a file matches any exclude pattern (default + user-configured)."""
     # Use the path relative to cwd for matching
@@ -164,60 +169,66 @@ def _emit_config_warnings(config: dict) -> None:
         emit(f"~~ ecko ~~ warning: {w}\n")
 
 
+_INSTALL_HINTS: dict[str, str] = {
+    "ruff": "pip install ruff (or uvx ruff)",
+    "biome": "npm i -D @biomejs/biome (or npx @biomejs/biome)",
+    "pyright": "pip install pyright (or npm i -g pyright)",
+    "tsc": "npm i -D typescript",
+    "vulture": "pip install vulture (or uvx vulture)",
+    "knip": "npm i -D knip (or npx knip)",
+}
+
+
 def _emit_skipped_tools(skipped: list[str]) -> None:
-    """Emit a summary line for tools that were unavailable."""
-    if skipped:
-        names = ", ".join(f"{t} (not found)" for t in skipped)
-        emit(f"~~ ecko ~~ note: {names} — install for deeper checks\n")
+    """Emit a line per skipped tool with install hints."""
+    for tool in skipped:
+        hint = _INSTALL_HINTS.get(tool, "")
+        suffix = f" — try: {hint}" if hint else ""
+        emit(f"~~ ecko ~~ note: {tool} not found{suffix}\n")
 
 
-def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
-    """Run Layer 1 (auto-fix) then Layer 2 (echoes) on a single file."""
-    if not os.path.isfile(file_path):
-        return 0
+def _run_layer2_checks(
+    file_path: str,
+    lang: str,
+    plugin_root: str,
+    cwd: str,
+    shadow_allowlist: frozenset[str] | None = None,
+    banned: list[dict[str, str]] | None = None,
+    obsolete: list[dict[str, str]] | None = None,
+    import_rules: list[dict] | None = None,
+    ruff_available: bool | None = None,
+    biome_available: bool | None = None,
+) -> tuple[list[Echo], list[str]]:
+    """Run Layer 2 checks on a single file.
 
-    # Type stubs (.pyi) exist for type checkers, not runtime — skip linting
-    if file_path.endswith(".pyi"):
-        return 0
+    Returns (echoes, skipped_tools).  Caller controls tool availability
+    to avoid redundant resolution in loops.
+    """
+    from checks.tools.resolve import resolve_node_tool, resolve_python_tool
 
-    config = load_config(cwd)
-    _emit_config_warnings(config)
-
-    if is_excluded(file_path, cwd, get_exclude_patterns(config)):
-        return 0
-
-    disabled = get_disabled_checks(config)
-    shadow_allowlist = get_builtin_shadow_allowlist(config)
-    echo_cap = get_echo_cap(config)
-    lang = detect_language(file_path)
-
-    # --- Layer 1: Auto-fix (silent) ---
-    from checks.formatter import autofix
-
-    autofix(file_path, lang, config)
-
-    # --- Layer 2: Echoes ---
     echoes: list[Echo] = []
     skipped: list[str] = []
 
     # Tool checks
     if lang == "python":
-        from checks.tools.resolve import resolve_python_tool
-        from checks.tools.ruff_adapter import run_ruff
-
-        if resolve_python_tool("ruff") is None:
+        if ruff_available is None:
+            ruff_available = resolve_python_tool("ruff") is not None
+        if not ruff_available:
             skipped.append("ruff")
         else:
+            from checks.tools.ruff_adapter import run_ruff
+
             echoes.extend(
                 run_ruff(file_path, builtin_shadow_allowlist=shadow_allowlist)
             )
     elif lang in ("typescript", "javascript"):
-        from checks.tools.biome_adapter import run_biome
-        from checks.tools.resolve import resolve_node_tool
-
-        if resolve_node_tool("biome") is None:
+        if biome_available is None:
+            biome_available = resolve_node_tool("biome") is not None
+        if not biome_available:
             skipped.append("biome")
         else:
+            from checks.tools.biome_adapter import run_biome
+
             echoes.extend(run_biome(file_path, plugin_root))
 
     # Custom checks (Python AST)
@@ -239,25 +250,62 @@ def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
     echoes.extend(check_unicode_artifacts(file_path))
 
     # Banned patterns
-    banned = get_banned_patterns(config)
     if banned:
         from checks.custom.banned_patterns import check_banned_patterns
 
         echoes.extend(check_banned_patterns(file_path, banned, cwd))
 
     # Obsolete terms
-    obsolete = get_obsolete_terms(config)
     if obsolete:
         from checks.custom.banned_patterns import check_obsolete_terms
 
         echoes.extend(check_obsolete_terms(file_path, obsolete))
 
     # Import layer rules
-    import_rules = get_import_rules(config)
     if import_rules:
         from checks.custom.import_layers import check_import_layers
 
         echoes.extend(check_import_layers(file_path, import_rules, cwd))
+
+    return echoes, skipped
+
+
+def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
+    """Run Layer 1 (auto-fix) then Layer 2 (echoes) on a single file."""
+    if not os.path.isfile(file_path):
+        return 0
+
+    # Type stubs (.pyi) and tsd type assertion files — skip linting
+    if _is_skippable_stub(file_path):
+        return 0
+
+    config = load_config(cwd)
+    _emit_config_warnings(config)
+
+    if is_excluded(file_path, cwd, get_exclude_patterns(config)):
+        return 0
+
+    disabled = get_disabled_checks(config)
+    shadow_allowlist = get_builtin_shadow_allowlist(config)
+    echo_cap = get_echo_cap(config)
+    lang = detect_language(file_path)
+
+    # --- Layer 1: Auto-fix (silent) ---
+    from checks.formatter import autofix
+
+    autofix(file_path, lang, config)
+
+    # --- Layer 2: Echoes ---
+    echoes, skipped = _run_layer2_checks(
+        file_path,
+        lang,
+        plugin_root,
+        cwd,
+        shadow_allowlist=shadow_allowlist,
+        banned=get_banned_patterns(config),
+        obsolete=get_obsolete_terms(config),
+        import_rules=get_import_rules(config),
+    )
 
     # Filter
     echoes = filter_suppressed(echoes, file_path)
@@ -343,7 +391,7 @@ def run_stop(cwd: str, plugin_root: str) -> int:
                     futures[pool.submit(_run_tsc)] = "tsc"
 
         if py_files and is_deep_enabled(config, "pyright"):
-            if resolve_node_tool("pyright") is None:
+            if resolve_python_tool("pyright") is None:
                 skipped.append("pyright")
             else:
                 futures[pool.submit(_run_pyright)] = "pyright"
@@ -361,9 +409,11 @@ def run_stop(cwd: str, plugin_root: str) -> int:
                 futures[pool.submit(_run_knip)] = "knip"
 
         for future in as_completed(futures):
+            tool_name = futures[future]
             try:
                 result = future.result()
-            except Exception:
+            except Exception as exc:
+                emit(f"~~ ecko ~~ warning: {tool_name} failed during deep analysis: {exc}\n")
                 continue
             for path, echoes in result.items():
                 norm = _normalize_path(path, cwd)
@@ -387,51 +437,22 @@ def run_stop(cwd: str, plugin_root: str) -> int:
     for file_path in modified:
         if not os.path.isfile(file_path):
             continue
+        # Skip type stubs and tsd assertion files
+        if _is_skippable_stub(file_path):
+            continue
         lang = detect_language(file_path)
-        echoes: list[Echo] = []
-
-        if lang == "python":
-            if ruff_available:
-                from checks.tools.ruff_adapter import run_ruff
-
-                echoes.extend(
-                    run_ruff(file_path, builtin_shadow_allowlist=shadow_allowlist)
-                )
-            from checks.custom.duplicate_keys import check_duplicate_keys
-            from checks.custom.unreachable_code import check_unreachable_code
-
-            echoes.extend(check_duplicate_keys(file_path))
-            echoes.extend(check_unreachable_code(file_path))
-
-            if _is_test_file(file_path):
-                from checks.custom.test_quality import check_test_quality
-
-                echoes.extend(check_test_quality(file_path))
-        elif lang in ("typescript", "javascript"):
-            if biome_available:
-                from checks.tools.biome_adapter import run_biome
-
-                echoes.extend(run_biome(file_path, plugin_root))
-
-        from checks.custom.unicode_artifacts import check_unicode_artifacts
-
-        echoes.extend(check_unicode_artifacts(file_path))
-
-        if banned:
-            from checks.custom.banned_patterns import check_banned_patterns
-
-            echoes.extend(check_banned_patterns(file_path, banned, cwd))
-
-        if obsolete:
-            from checks.custom.banned_patterns import check_obsolete_terms
-
-            echoes.extend(check_obsolete_terms(file_path, obsolete))
-
-        if import_rules:
-            from checks.custom.import_layers import check_import_layers
-
-            echoes.extend(check_import_layers(file_path, import_rules, cwd))
-
+        echoes, _skip = _run_layer2_checks(
+            file_path,
+            lang,
+            plugin_root,
+            cwd,
+            shadow_allowlist=shadow_allowlist,
+            banned=banned,
+            obsolete=obsolete,
+            import_rules=import_rules,
+            ruff_available=ruff_available,
+            biome_available=biome_available,
+        )
         if echoes:
             all_echoes.setdefault(_normalize_path(file_path, cwd), []).extend(echoes)
 
@@ -485,32 +506,34 @@ def check_bash_command(command: str, user_patterns: list[dict[str, str]]) -> str
 
     Returns the block message if the command should be blocked, or None if allowed.
     """
-    import re
 
     # Hardcoded patterns (always active, truly dangerous)
+    # Note: rm patterns match optional full paths (/bin/rm, /usr/bin/rm),
+    # command prefix, and backslash escape (\rm) bypass variants.
+    _rm_prefix = r"(?:/(?:usr/)?(?:s?bin)/|\\|command\s+)?"
     hardcoded = [
         {
             "pattern": r"git\b.*--no-verify",
             "message": "Blocked: --no-verify skips hooks — remove it to let ecko checks run",
         },
         {
-            "pattern": r"\brm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+/(\s|$|;|&|\|)",
+            "pattern": _rm_prefix + r"\brm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+/(\s|$|;|&|\|)",
             "message": "Blocked: rm -rf / is catastrophic — specify a subdirectory",
         },
         {
-            "pattern": r"\brm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+~(\s|$|;|&|\||/)",
+            "pattern": _rm_prefix + r"\brm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+~(\s|$|;|&|\||/)",
             "message": "Blocked: rm -rf ~ would delete the home directory",
         },
         {
-            "pattern": r"git\s+push\b.*--force(?!-with-lease)(\s|$|;|&|\|)",
+            "pattern": r"git\s+(?:-C\s+\S+\s+)*push\b(?!.*--force-with-lease).*(?:--force|-f)(\s|$|;|&|\|)",
             "message": "Blocked: use --force-with-lease instead of --force to prevent overwriting remote work",
         },
         {
-            "pattern": r"git\s+reset\s+--hard(\s|$|;|&|\|)",
+            "pattern": r"git\s+(?:-C\s+\S+\s+)*reset\s+--hard(\s|$|;|&|\|)",
             "message": "Blocked: git reset --hard discards commits permanently — use git stash or git revert instead",
         },
         {
-            "pattern": r"git\s+clean\s+-[a-zA-Z]*f[a-zA-Z]*(\s|$|;|&|\|)",
+            "pattern": r"git\s+(?:-C\s+\S+\s+)*clean\s+-[a-zA-Z]*f[a-zA-Z]*(\s|$|;|&|\|)",
             "message": "Blocked: git clean -f deletes untracked files permanently — review with git clean -n first",
         },
     ]
@@ -520,11 +543,8 @@ def check_bash_command(command: str, user_patterns: list[dict[str, str]]) -> str
         message = entry.get("message", "Command blocked by ecko")
         if not pattern:
             continue
-        try:
-            if _safe_regex_search(pattern, command):
-                return message
-        except re.error:
-            continue
+        if _safe_regex_search(pattern, command):
+            return message
     return None
 
 

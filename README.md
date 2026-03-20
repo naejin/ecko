@@ -1,6 +1,6 @@
 # ecko
 
-[![v0.5.1](https://img.shields.io/badge/version-0.5.1-blue)](https://github.com/naejin/ecko/releases/tag/v0.5.1)
+[![v0.6.0](https://img.shields.io/badge/version-0.6.0-blue)](https://github.com/naejin/ecko/releases/tag/v0.6.0)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-plugin-7c3aed)](https://docs.anthropic.com/en/docs/claude-code)
 [![Python](https://img.shields.io/badge/python-3.10+-3776ab?logo=python&logoColor=white)](https://python.org)
 [![TypeScript](https://img.shields.io/badge/typescript-supported-3178c6?logo=typescript&logoColor=white)](https://typescriptlang.org)
@@ -269,14 +269,15 @@ if x == None:  # ecko:ignore[singleton-comparison]
 
 All tools are resolved automatically — no manual installation required. Ecko checks PATH first (uses your local install if present), then falls back to `uvx`/`npx` which download and cache tools on demand.
 
-When tools are unavailable, ecko reports what was skipped:
+When tools are unavailable, ecko reports what was skipped with install hints:
 ```
-~~ ecko ~~ note: ruff (not found), vulture (not found) — install for deeper checks
+~~ ecko ~~ note: ruff not found — try: pip install ruff (or uvx ruff)
+~~ ecko ~~ note: vulture not found — try: pip install vulture (or uvx vulture)
 ```
 
 ## Troubleshooting
 
-**Ecko runs but reports nothing** — Check if your tools are installed: run `/ecko:status`. If no tools are found and you don't have `uvx`/`npx`, install [uv](https://docs.astral.sh/uv) or [Node.js](https://nodejs.org). Ecko will report skipped tools when they're unavailable.
+**Ecko runs but reports nothing** — Check if your tools are installed: run `/ecko:status`. If no tools are found and you don't have `uvx`/`npx`, install [uv](https://docs.astral.sh/uv) or [Node.js](https://nodejs.org). Ecko reports skipped tools with install hints (e.g., `ruff not found — try: pip install ruff`). If a tool times out or crashes, ecko emits a warning instead of silently returning nothing.
 
 **Config changes aren't taking effect** — Verify your `ecko.yaml` is in the project root (same directory as `.git`). Ecko validates config and warns about unknown keys:
 ```

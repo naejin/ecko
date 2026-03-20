@@ -8,11 +8,11 @@ PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # Parse the file path from the hook input JSON
 # Claude Code passes tool input as JSON on stdin
 INPUT=$(cat)
-FILE_PATH=$(echo "$INPUT" | python3 -c "
+FILE_PATH=$(printf '%s' "$INPUT" | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
 print(data.get('file_path', ''))
-" 2>/dev/null || echo "")
+" 2>/dev/null || { printf '%s\n' "~~ ecko ~~ warning: failed to parse hook input JSON" >&2; printf ''; })
 
 if [ -z "$FILE_PATH" ]; then
     exit 0

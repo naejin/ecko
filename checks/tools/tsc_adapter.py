@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import subprocess
 
-from checks.result import Echo
+from checks.result import Echo, emit
 from checks.tools.resolve import resolve_node_tool
 
 # tsc error format: path(line,col): error TSxxxx: message
@@ -26,7 +26,11 @@ def run_tsc(cwd: str) -> dict[str, list[Echo]]:
             cwd=cwd,
             timeout=60,
         )
-    except (subprocess.TimeoutExpired, OSError):
+    except subprocess.TimeoutExpired:
+        emit("~~ ecko ~~ warning: tsc timed out (60s limit)\n")
+        return {}
+    except OSError as exc:
+        emit(f"~~ ecko ~~ warning: tsc failed: {exc}\n")
         return {}
 
     # tsc writes errors to stdout

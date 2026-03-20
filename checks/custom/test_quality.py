@@ -133,10 +133,12 @@ def _is_pytest_call(node: ast.expr, method: str) -> bool:
 
 def _walk_shallow(node: ast.AST) -> list[ast.AST]:
     """Walk AST children without descending into nested function/class defs."""
+    from collections import deque
+
     result: list[ast.AST] = []
-    queue = list(ast.iter_child_nodes(node))
+    queue = deque(ast.iter_child_nodes(node))
     while queue:
-        child = queue.pop(0)
+        child = queue.popleft()
         result.append(child)
         # Don't descend into nested functions or classes
         if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):

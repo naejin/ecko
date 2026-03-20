@@ -92,6 +92,25 @@ class TestBashGuardHardcoded:
         result = check_bash_command("git push --force-with-lease origin main", [])
         assert result is None
 
+    def test_blocks_push_short_f(self):
+        result = check_bash_command("git push -f origin main", [])
+        assert result is not None
+
+    def test_allows_force_with_lease_and_force_combined(self):
+        """--force-with-lease --force together should NOT be blocked."""
+        result = check_bash_command("git push --force-with-lease --force origin main", [])
+        assert result is None
+
+    def test_allows_force_then_force_with_lease(self):
+        """--force followed by --force-with-lease should NOT be blocked."""
+        result = check_bash_command("git push --force --force-with-lease origin main", [])
+        assert result is None
+
+    def test_allows_short_f_with_force_with_lease(self):
+        """-f combined with --force-with-lease should NOT be blocked."""
+        result = check_bash_command("git push -f --force-with-lease origin main", [])
+        assert result is None
+
     def test_blocks_git_reset_hard(self):
         result = check_bash_command("git reset --hard", [])
         assert result is not None
@@ -122,6 +141,48 @@ class TestBashGuardHardcoded:
 
     def test_blocks_git_clean_piped(self):
         result = check_bash_command("git clean -fd | tee log.txt", [])
+        assert result is not None
+
+    # --- Full-path bypass variants ---
+
+    def test_blocks_full_path_rm_rf_root(self):
+        result = check_bash_command("/bin/rm -rf /", [])
+        assert result is not None
+
+    def test_blocks_usr_bin_rm_rf_root(self):
+        result = check_bash_command("/usr/bin/rm -rf /", [])
+        assert result is not None
+
+    def test_blocks_backslash_rm_rf_root(self):
+        result = check_bash_command("\\rm -rf /", [])
+        assert result is not None
+
+    def test_blocks_command_rm_rf_root(self):
+        result = check_bash_command("command rm -rf /", [])
+        assert result is not None
+
+    def test_blocks_git_c_push_force(self):
+        result = check_bash_command("git -C /some/path push --force origin main", [])
+        assert result is not None
+
+    def test_blocks_git_c_reset_hard(self):
+        result = check_bash_command("git -C /repo reset --hard", [])
+        assert result is not None
+
+    def test_blocks_git_c_clean_f(self):
+        result = check_bash_command("git -C /repo clean -f", [])
+        assert result is not None
+
+    def test_blocks_full_path_rm_rf_home(self):
+        result = check_bash_command("/usr/bin/rm -rf ~", [])
+        assert result is not None
+
+    def test_blocks_multiple_c_flags_push_force(self):
+        result = check_bash_command("git -C /a -C ../b push --force origin main", [])
+        assert result is not None
+
+    def test_blocks_multiple_c_flags_reset_hard(self):
+        result = check_bash_command("git -C /a -C /b reset --hard", [])
         assert result is not None
 
 
@@ -180,3 +241,21 @@ class TestBashGuardUserPatterns:
         # Should not crash — invalid patterns are skipped gracefully
         result = check_bash_command("echo hello", patterns)
         assert result is None
+
+    def test_redos_pattern_does_not_hang(self):
+        """Pathological regex should timeout, not hang the process."""
+        import time
+
+        patterns = [
+            {"pattern": r"(a+)+b", "message": "ReDoS test"}
+        ]
+        # Input that triggers catastrophic backtracking: 'a' * N + '!'
+        # The '!' forces the engine to exhaust all 2^N prefix splits before failing.
+        evil_input = "a" * 25 + "!"
+        start = time.monotonic()
+        result = check_bash_command(evil_input, patterns)
+        elapsed = time.monotonic() - start
+        # Should return None (timeout → no match), not hang
+        assert result is None
+        # Must complete within 3s (timeout is 500ms + thread overhead)
+        assert elapsed < 5.0, f"ReDoS guard too slow: {elapsed:.1f}s"

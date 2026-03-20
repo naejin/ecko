@@ -6,7 +6,7 @@ import json
 import re
 import subprocess
 
-from checks.result import Echo
+from checks.result import Echo, emit
 from checks.tools.resolve import resolve_python_tool
 
 # Ruff rules we check
@@ -55,7 +55,11 @@ def run_ruff(
             text=True,
             timeout=30,
         )
-    except (subprocess.TimeoutExpired, OSError):
+    except subprocess.TimeoutExpired:
+        emit(f"~~ ecko ~~ warning: ruff timed out on {file_path} (30s limit)\n")
+        return []
+    except OSError as exc:
+        emit(f"~~ ecko ~~ warning: ruff failed: {exc}\n")
         return []
 
     # ruff exits 1 when violations found — that's expected

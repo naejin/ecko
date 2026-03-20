@@ -108,9 +108,20 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Tag, push tag, `gh release create v{X} --title "..." --notes-file /tmp/release-notes.md` (flag is `-F`/`--notes-file`, NOT `--body`)
 - Verify with: `curl -fsSL https://raw.githubusercontent.com/naejin/ecko/main/scripts/install.sh | bash`
 
+## Transparency (v0.6.0)
+- Tool adapter failure reporting: all adapters catch `TimeoutExpired` vs `OSError` separately, emit `~~ ecko ~~ warning: {tool} timed out/failed` to stderr
+- Thread pool error reporting in `run_stop()`: failed futures emit tool name + exception
+- Skipped-tool messages include install hints (`ruff not found — try: pip install ruff`)
+- Echo cap overflow messages explain how to configure the limit
+- Layer 2 check dispatch extracted to `_run_layer2_checks()` — single place to add new checks
+- `.test-d.ts` files skipped from all linting (tsd type assertion files)
+- Bash guard catches full-path (`/bin/rm`), backslash-escaped (`\rm`), `command rm`, and `git -C` prefix bypass variants
+- `banned_patterns` `re.compile()` runs inside timeout protection (same as `re.search()`)
+- Import-layer echoes report actual line numbers (AST lineno for Python, regex offset for JS/TS)
+
 ## Current version and next milestone
-- Current: v0.5.1 (trust + safety + performance)
-- Previous: v0.5.0 (noise reduction + architecture enforcement)
+- Current: v0.6.0 (transparency + trust)
+- Previous: v0.5.1 (trust + safety + performance)
 
 ## Not part of the plugin
 - `docs/ideas/` — internal ideation (gitignored)
