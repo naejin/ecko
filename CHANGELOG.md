@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.5.0
+
+Noise reduction and architecture enforcement — fewer false positives, smarter filtering, and import layer rules.
+
+### Noise reduction
+
+- **Builtin-shadowing allowlist** — 20 common names (`type`, `help`, `input`, `format`, `id`, `repr`, `ascii`, etc.) are now allowed by default when used as function parameters (ruff A001/A002). Customizable via `builtin_shadow_allowlist` in `ecko.yaml`. User list replaces the default entirely.
+- **Echo cap per check per file** — repeated echoes of the same check are capped at 5 per file (configurable via `echo_cap_per_check`). Overflow is summarized as "... and N more". Prevents avalanches from noisy checks like `var-declarations` in legacy JS codebases.
+- **Biome check rename** — `empty-error-handlers` renamed to `empty-block-statements` to accurately reflect the check's scope (all empty blocks, not just catch). **Breaking:** users with `empty-error-handlers` in `disabled_checks` must update to `empty-block-statements`.
+- **Unreachable yield-after-raise** — `yield` after `raise` in generators and `@contextmanager` functions is no longer flagged as unreachable code. These patterns establish the generator protocol and are intentional.
+- **Vulture dunder filter** — unused variables/arguments starting with `__` (e.g., `__n`, `__limit`) and unused methods starting with `__` (e.g., `__get__`, `__set__`) are now filtered. Covers protocol interface parameters and descriptor methods.
+- **Vulture descriptor params** — `objtype`, `owner` (descriptor `__get__`), and `sender` (signal handlers) added to the always-skip list.
+- **Vulture dynamic fixture collection** — scans `conftest.py` files for `@pytest.fixture` decorated functions and adds their names to the test-file skip list. Eliminates FPs on project-specific fixtures without manual configuration.
+- **Vulture yield-after-raise filter** — vulture's own "unreachable code after 'raise'" detection now skips yield statements in generators/async generators (same pattern as the custom check, applied to vulture output).
+- **Encoding fix** — `unreachable_code.py` now uses `encoding="utf-8"` for file reads (CLAUDE.md requirement).
+
+### Architecture enforcement
+
+- **Import layer rules** — new `import_rules` config enforces architectural boundaries. Each rule specifies which files (by glob) are denied from importing which modules. Separator-aware prefix matching prevents false positives (`repositories.user` matches deny `repositories`, but `my_repositories` does not). Supports Python (AST-based) and JS/TS (regex-based).
+
+### Tune command
+
+- `/ecko:tune` now recommends `import_rules` (scans directory structure for layer patterns), `builtin_shadow_allowlist` (checks for A001/A002 hits), and `echo_cap_per_check` (based on project type).
+
+### YAML parser
+
+- Nested lists in list-of-dict config blocks are now supported (required for `import_rules` with `deny_import` sub-lists).
+
+### Tests
+
+New test files: `test_noise_reduction.py`, `test_fixture_collection.py`, `test_import_layers.py`. New fixture: `route_bad_import.py`.
+
 ## v0.4.0
 
 CodeLeash-inspired workflow guardrails — deterministic constraints that catch mistakes before the developer sees them.

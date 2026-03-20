@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 
 from checks.result import Echo
@@ -25,7 +26,14 @@ RULE_MAP = {
 }
 
 
-def run_ruff(file_path: str) -> list[Echo]:
+# Ruff A001/A002 message format: Variable `type` is shadowing a Python builtin
+_SHADOW_NAME_RE = re.compile(r"`(\w+)` is shadowing")
+
+
+def run_ruff(
+    file_path: str,
+    builtin_shadow_allowlist: frozenset[str] | None = None,
+) -> list[Echo]:
     """Run ruff on a file and return echoes."""
     cmd = resolve_python_tool("ruff")
     if not cmd:
@@ -66,6 +74,13 @@ def run_ruff(file_path: str) -> list[Echo]:
         check = RULE_MAP.get(code, code.lower())
         line = v.get("location", {}).get("row", 0)
         message = v.get("message", "")
+
+        # Filter builtin-shadowing by allowlist
+        if check == "builtin-shadowing" and builtin_shadow_allowlist is not None:
+            m = _SHADOW_NAME_RE.search(message)
+            if m and m.group(1) in builtin_shadow_allowlist:
+                continue
+
         echoes.append(Echo(check=check, line=line, message=message))
 
     return echoes

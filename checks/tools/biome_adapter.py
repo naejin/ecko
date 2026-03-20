@@ -16,7 +16,7 @@ RULE_MAP = {
     "noDebugger": "debugger-statements",
     "noVar": "var-declarations",
     "noDuplicateObjectKeys": "duplicate-keys",
-    "noEmptyBlockStatements": "empty-error-handlers",
+    "noEmptyBlockStatements": "empty-block-statements",
     "noUselessCatch": "useless-catch",
 }
 

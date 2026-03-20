@@ -28,6 +28,37 @@ obsolete_terms:
   - old: "UserProfile"
     new: "Account"
 
+# Import layer rules — architecture boundary enforcement
+# Prevents modules from importing across layer boundaries.
+# Each rule specifies which files (by glob) are denied from importing which modules.
+import_rules: []
+  # - files: "routes/*.py"
+  #   deny_import:
+  #     - repositories
+  #     - sqlalchemy
+  #   message: "Routes must not import from the data layer directly"
+  # - files: "components/*.tsx"
+  #   deny_import:
+  #     - api
+  #   message: "Components should use hooks, not call API directly"
+
+# Builtin-shadowing allowlist — names allowed to shadow Python builtins (A001/A002)
+# When set, REPLACES the default allowlist entirely.
+# To extend the default, copy all default entries plus your additions.
+# Default: type, help, input, format, id, dir, open, filter, map, hash,
+#          min, max, range, slice, vars, locals, globals, property, repr, ascii
+# builtin_shadow_allowlist:
+#   - type
+#   - help
+#   - input
+#   - format
+#   - id
+#   - custom_name
+
+# Echo cap per check per file — limits repeated echoes of the same check
+# Default: 5 (0 = unlimited). Useful for noisy checks like var-declarations.
+# echo_cap_per_check: 5
+
 # Exclude files from all checks (glob patterns, matched against relative paths)
 # Built-in: any file under a directory named fixtures, __fixtures__,
 # __snapshots__, vendor, node_modules, .git, dist, build, or __pycache__
@@ -52,9 +83,10 @@ learnings:
 
 # Disable specific built-in checks (by ecko check name)
 # Available checks: unused-imports, singleton-comparison, bare-except,
-#   star-imports, mutable-default-args, builtin-shadowing, empty-error-handlers,
+#   star-imports, mutable-default-args, builtin-shadowing,
+#   empty-error-handlers (ruff), empty-block-statements (biome),
 #   unreachable-code, debugger-statements, var-declarations, duplicate-keys,
 #   useless-catch, unicode-artifact, banned-pattern, obsolete-term,
 #   type-error, dead-code, unused-file, unused-export,
-#   test-conditional, fixed-wait, mock-spec-bypass
+#   test-conditional, fixed-wait, mock-spec-bypass, import-layer
 disabled_checks: []

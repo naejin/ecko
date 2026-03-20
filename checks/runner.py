@@ -17,8 +17,11 @@ from fnmatch import fnmatch
 from checks.config import (
     get_banned_patterns,
     get_blocked_commands,
+    get_builtin_shadow_allowlist,
     get_disabled_checks,
+    get_echo_cap,
     get_exclude_patterns,
+    get_import_rules,
     get_obsolete_terms,
     is_deep_enabled,
     is_learnings_enabled,
@@ -62,7 +65,9 @@ def detect_language(file_path: str) -> str:
 def _is_test_file(file_path: str) -> bool:
     """Check if a file is a Python test file (by filename convention)."""
     name = os.path.basename(file_path)
-    return name.startswith("test_") or name.endswith("_test.py") or name == "conftest.py"
+    return (
+        name.startswith("test_") or name.endswith("_test.py") or name == "conftest.py"
+    )
 
 
 def is_excluded(file_path: str, cwd: str, user_excludes: list[str]) -> bool:
@@ -165,6 +170,8 @@ def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
         return 0
 
     disabled = get_disabled_checks(config)
+    shadow_allowlist = get_builtin_shadow_allowlist(config)
+    echo_cap = get_echo_cap(config)
     lang = detect_language(file_path)
 
     # --- Layer 1: Auto-fix (silent) ---
@@ -179,7 +186,7 @@ def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
     if lang == "python":
         from checks.tools.ruff_adapter import run_ruff
 
-        echoes.extend(run_ruff(file_path))
+        echoes.extend(run_ruff(file_path, builtin_shadow_allowlist=shadow_allowlist))
     elif lang in ("typescript", "javascript"):
         from checks.tools.biome_adapter import run_biome
 
@@ -217,12 +224,19 @@ def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
 
         echoes.extend(check_obsolete_terms(file_path, obsolete))
 
+    # Import layer rules
+    import_rules = get_import_rules(config)
+    if import_rules:
+        from checks.custom.import_layers import check_import_layers
+
+        echoes.extend(check_import_layers(file_path, import_rules, cwd))
+
     # Filter
     echoes = filter_suppressed(echoes, file_path)
     echoes = [e for e in echoes if e.check not in disabled]
 
     if echoes:
-        emit(format_file_echoes(file_path, echoes))
+        emit(format_file_echoes(file_path, echoes, echo_cap=echo_cap))
         return 1
     return 0
 
@@ -239,6 +253,9 @@ def run_stop(cwd: str, plugin_root: str) -> int:
     config = load_config(cwd)
     disabled = get_disabled_checks(config)
     user_excludes = get_exclude_patterns(config)
+    shadow_allowlist = get_builtin_shadow_allowlist(config)
+    echo_cap = get_echo_cap(config)
+    import_rules = get_import_rules(config)
 
     # Find modified files, filtering excluded paths
     modified = [
@@ -295,7 +312,9 @@ def run_stop(cwd: str, plugin_root: str) -> int:
         if lang == "python":
             from checks.tools.ruff_adapter import run_ruff
 
-            echoes.extend(run_ruff(file_path))
+            echoes.extend(
+                run_ruff(file_path, builtin_shadow_allowlist=shadow_allowlist)
+            )
             from checks.custom.duplicate_keys import check_duplicate_keys
             from checks.custom.unreachable_code import check_unreachable_code
 
@@ -327,6 +346,11 @@ def run_stop(cwd: str, plugin_root: str) -> int:
 
             echoes.extend(check_obsolete_terms(file_path, obsolete))
 
+        if import_rules:
+            from checks.custom.import_layers import check_import_layers
+
+            echoes.extend(check_import_layers(file_path, import_rules, cwd))
+
         if echoes:
             all_echoes.setdefault(_normalize_path(file_path, cwd), []).extend(echoes)
 
@@ -356,7 +380,7 @@ def run_stop(cwd: str, plugin_root: str) -> int:
     has_echoes = bool(all_echoes)
 
     if has_echoes:
-        emit(format_stop_echoes(all_echoes))
+        emit(format_stop_echoes(all_echoes, echo_cap=echo_cap))
 
     # Learnings nudge — only when echoes were found (something went wrong)
     if has_echoes and is_learnings_enabled(config):
@@ -374,9 +398,7 @@ def run_stop(cwd: str, plugin_root: str) -> int:
     return 0
 
 
-def check_bash_command(
-    command: str, user_patterns: list[dict[str, str]]
-) -> str | None:
+def check_bash_command(command: str, user_patterns: list[dict[str, str]]) -> str | None:
     """Check a bash command against blocked patterns.
 
     Returns the block message if the command should be blocked, or None if allowed.

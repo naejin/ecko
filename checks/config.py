@@ -98,6 +98,10 @@ def _parse_list_block(lines: list[str]) -> list[Any]:
                 k, _, v = content.partition(":")
                 item_dict[k.strip()] = _parse_scalar(v.strip())
                 i += 1
+                # Track the most recent key assigned empty value for sub-list binding
+                last_empty_key: str | None = None
+                if not v.strip():
+                    last_empty_key = k.strip()
                 # Collect continuation lines at deeper indent
                 list_item_indent = len(lines[i - 1]) - len(lines[i - 1].lstrip())
                 while i < len(lines):
@@ -107,12 +111,47 @@ def _parse_list_block(lines: list[str]) -> list[Any]:
                         i += 1
                         continue
                     nindent = len(nline) - len(nline.lstrip())
-                    if nindent <= list_item_indent or nstripped.startswith("- "):
+                    if nindent <= list_item_indent:
                         break
-                    if ":" in nstripped:
+                    # Sub-list items (- foo) at deeper indent than list item
+                    if nstripped.startswith("- ") and last_empty_key is not None:
+                        sub_list: list[Any] = []
+                        sub_indent = nindent
+                        while i < len(lines):
+                            sline = lines[i]
+                            sstripped = sline.strip()
+                            if not sstripped or sstripped.startswith("#"):
+                                i += 1
+                                continue
+                            sindent = len(sline) - len(sline.lstrip())
+                            if sindent < sub_indent or (
+                                sindent == sub_indent and not sstripped.startswith("- ")
+                            ):
+                                break
+                            if sindent > sub_indent:
+                                # Deeper than sub-list — skip (not supported)
+                                i += 1
+                                continue
+                            if sstripped.startswith("- "):
+                                sub_list.append(_parse_scalar(sstripped[2:]))
+                            i += 1
+                        item_dict[last_empty_key] = sub_list
+                        last_empty_key = None
+                    elif nstripped.startswith("- "):
+                        # Sub-list but no empty key to bind to — stop
+                        break
+                    elif ":" in nstripped:
                         nk, _, nv = nstripped.partition(":")
-                        item_dict[nk.strip()] = _parse_scalar(nv.strip())
-                    i += 1
+                        nk_clean = nk.strip()
+                        nv_clean = nv.strip()
+                        item_dict[nk_clean] = _parse_scalar(nv_clean)
+                        if not nv_clean:
+                            last_empty_key = nk_clean
+                        else:
+                            last_empty_key = None
+                        i += 1
+                    else:
+                        i += 1
                 items.append(item_dict)
             else:
                 items.append(_parse_scalar(content))
@@ -236,6 +275,56 @@ def get_blocked_commands(config: dict[str, Any]) -> list[dict[str, str]]:
     patterns = config.get("blocked_commands", [])
     if isinstance(patterns, list):
         return patterns
+    return []
+
+
+_DEFAULT_BUILTIN_SHADOW_ALLOWLIST = frozenset(
+    {
+        "type",
+        "help",
+        "input",
+        "format",
+        "id",
+        "dir",
+        "open",
+        "filter",
+        "map",
+        "hash",
+        "min",
+        "max",
+        "range",
+        "slice",
+        "vars",
+        "locals",
+        "globals",
+        "property",
+        "repr",
+        "ascii",
+    }
+)
+
+
+def get_builtin_shadow_allowlist(config: dict[str, Any]) -> frozenset[str]:
+    """Return builtin-shadowing allowlist. User list replaces default entirely."""
+    user = config.get("builtin_shadow_allowlist")
+    if isinstance(user, list):
+        return frozenset(str(n) for n in user)
+    return _DEFAULT_BUILTIN_SHADOW_ALLOWLIST
+
+
+def get_echo_cap(config: dict[str, Any]) -> int:
+    """Return the per-check-per-file echo cap. Default 5, 0 = unlimited."""
+    cap = config.get("echo_cap_per_check", 5)
+    if isinstance(cap, int):
+        return cap
+    return 5
+
+
+def get_import_rules(config: dict[str, Any]) -> list[dict]:
+    """Return list of import rule dicts from config."""
+    rules = config.get("import_rules", [])
+    if isinstance(rules, list):
+        return rules
     return []
 
 

@@ -1,6 +1,6 @@
 # ecko
 
-[![v0.4.0](https://img.shields.io/badge/version-0.4.0-blue)](https://github.com/naejin/ecko/releases/tag/v0.4.0)
+[![v0.5.0](https://img.shields.io/badge/version-0.5.0-blue)](https://github.com/naejin/ecko/releases/tag/v0.5.0)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-plugin-7c3aed)](https://docs.anthropic.com/en/docs/claude-code)
 [![Python](https://img.shields.io/badge/python-3.10+-3776ab?logo=python&logoColor=white)](https://python.org)
 [![TypeScript](https://img.shields.io/badge/typescript-supported-3178c6?logo=typescript&logoColor=white)](https://typescriptlang.org)
@@ -118,8 +118,9 @@ Ecko hooks into four moments in a Claude Code session:
 | `bare-except` | ruff | py | Bare `except:` |
 | `star-imports` | ruff | py | `from x import *` |
 | `mutable-default-args` | ruff | py | `def f(x=[])` |
-| `builtin-shadowing` | ruff | py | Variable shadows builtin |
-| `empty-error-handlers` | ruff / biome | py / ts | `except: pass` or `catch(e) {}` |
+| `builtin-shadowing` | ruff | py | Variable shadows builtin (filtered by allowlist) |
+| `empty-error-handlers` | ruff | py | `except: pass` |
+| `empty-block-statements` | biome | ts | Empty `{}` blocks |
 | `unreachable-code` | biome | ts | Code after return/throw |
 | `debugger-statements` | biome | ts | `debugger` |
 | `var-declarations` | biome | ts | `var` usage |
@@ -135,6 +136,7 @@ Ecko hooks into four moments in a Claude Code session:
 | `unicode-artifact` | all | Em dashes, smart quotes, zero-width chars from LLM output |
 | `banned-pattern` | all | Custom regex patterns from `ecko.yaml` |
 | `obsolete-term` | all | Old names that should be renamed |
+| `import-layer` | py / ts | Import boundary violations from `import_rules` config |
 
 ### Layer 2 — Test Quality (Python test files only)
 
@@ -185,10 +187,21 @@ obsolete_terms:
   - old: "UserProfile"
     new: "Account"
 
+# Enforce architecture boundaries
+import_rules:
+  - files: "routes/*.py"
+    deny_import:
+      - repositories
+      - sqlalchemy
+    message: "Routes must not import from the data layer"
+
 # Block dangerous bash commands (in addition to built-in blocks)
 blocked_commands:
   - pattern: "git push.*--force(?!-with-lease)"
     message: "Use --force-with-lease instead of --force"
+
+# Cap repeated echoes per check per file (default: 5, 0 = unlimited)
+echo_cap_per_check: 5
 
 # Nudge agent to write learnings when echoes are found on stop
 learnings:

@@ -14,6 +14,8 @@ Also scan the codebase for patterns that suggest useful guardrails:
 - Raw values that should use abstractions (e.g., hex colors, hardcoded URLs, magic numbers)
 - Naming inconsistencies (old names that should be replaced)
 - Common mistakes the agent might make based on the codebase structure
+- Function signatures with Python builtin names as parameters (type, id, input, format) — may need `builtin_shadow_allowlist` customization
+- Large legacy JS/TS codebases with many `var` declarations — may need `echo_cap_per_check` tuning
 
 ## Step 2: Generate Recommendations
 
@@ -44,8 +46,9 @@ blocked_commands:
     message: "Why this is blocked"
 ```
 
-### import_rules (v0.5.0)
+### import_rules
 Architecture boundary enforcement — which modules should not import from which.
+Scan the directory structure for layer patterns (routes/, models/, services/, repositories/, api/, components/, hooks/).
 ```yaml
 import_rules:
   - files: "routes/*.py"
@@ -53,6 +56,23 @@ import_rules:
       - repositories
       - sqlalchemy
     message: "Routes must not import from the data layer"
+```
+
+### builtin_shadow_allowlist
+If ruff A001/A002 hits are noisy (common param names like `type`, `input`, `format`), recommend extending or customizing the allowlist.
+```yaml
+builtin_shadow_allowlist:
+  - type
+  - help
+  - input
+  - format
+  - id
+```
+
+### echo_cap_per_check
+For projects with many legacy issues (e.g., JS codebases with hundreds of `var` declarations), recommend setting a cap to prevent avalanches.
+```yaml
+echo_cap_per_check: 3  # default: 5, 0 = unlimited
 ```
 
 ### CLAUDE.md improvements
