@@ -1,6 +1,6 @@
 # ecko
 
-[![v0.3.1](https://img.shields.io/badge/version-0.3.1-blue)](https://github.com/naejin/ecko/releases/tag/v0.3.1)
+[![v0.4.0](https://img.shields.io/badge/version-0.4.0-blue)](https://github.com/naejin/ecko/releases/tag/v0.4.0)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-plugin-7c3aed)](https://docs.anthropic.com/en/docs/claude-code)
 [![Python](https://img.shields.io/badge/python-3.10+-3776ab?logo=python&logoColor=white)](https://python.org)
 [![TypeScript](https://img.shields.io/badge/typescript-supported-3178c6?logo=typescript&logoColor=white)](https://typescriptlang.org)
@@ -57,7 +57,18 @@ Restart your Claude Code session for the hooks to take effect.
 
 ## How It Works
 
-Ecko hooks into two moments in a Claude Code session:
+Ecko hooks into four moments in a Claude Code session:
+
+**Before every Bash command** — dangerous commands are blocked before execution:
+
+```
+┌─────────────────────────────────────────────┐
+│  Bash guard (PreToolUse)                    │
+│  Blocks --no-verify, rm -rf /, rm -rf ~     │
+│  + user-configurable blocked_commands.      │
+│  Agent never executes the command.          │
+└─────────────────────────────────────────────┘
+```
 
 **After every Write/Edit** — your file gets cleaned up and checked:
 
@@ -70,7 +81,18 @@ Ecko hooks into two moments in a Claude Code session:
 │  Layer 2: Echoes (per-file)                 │
 │  ruff · biome · duplicate keys ·            │
 │  unreachable code · unicode artifacts ·     │
-│  banned patterns. Reports to agent.         │
+│  banned patterns · test quality.            │
+│  Reports to agent.                          │
+└─────────────────────────────────────────────┘
+```
+
+**When the agent exits plan mode** — a nudge to include test steps:
+
+```
+┌─────────────────────────────────────────────┐
+│  Plan check (PreToolUse)                    │
+│  Reminds agent to include test steps        │
+│  for all code changes in the plan.          │
 └─────────────────────────────────────────────┘
 ```
 
@@ -114,6 +136,14 @@ Ecko hooks into two moments in a Claude Code session:
 | `banned-pattern` | all | Custom regex patterns from `ecko.yaml` |
 | `obsolete-term` | all | Old names that should be renamed |
 
+### Layer 2 — Test Quality (Python test files only)
+
+| Check | What it catches |
+|-------|-----------------|
+| `test-conditional` | `if`/`else` inside test functions — tests should not branch |
+| `fixed-wait` | `time.sleep` / `asyncio.sleep` / `wait_for_timeout` — use polling instead |
+| `mock-spec-bypass` | Setting attributes on `Mock(spec=...)` objects — bypasses spec validation |
+
 ### Layer 3 — Deep Analysis
 
 | Check | Tool | What it catches |
@@ -129,6 +159,7 @@ Ecko hooks into two moments in a Claude Code session:
 | `/ecko:ping [file]` | Run checks on a file manually |
 | `/ecko:status` | Show installed tools and config |
 | `/ecko:setup` | Install missing tools interactively |
+| `/ecko:tune` | Analyze codebase and recommend ecko.yaml rules |
 
 ## Configuration
 
@@ -153,6 +184,15 @@ banned_patterns:
 obsolete_terms:
   - old: "UserProfile"
     new: "Account"
+
+# Block dangerous bash commands (in addition to built-in blocks)
+blocked_commands:
+  - pattern: "git push.*--force(?!-with-lease)"
+    message: "Use --force-with-lease instead of --force"
+
+# Nudge agent to write learnings when echoes are found on stop
+learnings:
+  enabled: true
 
 # Disable specific checks entirely
 disabled_checks:
