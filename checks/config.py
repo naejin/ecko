@@ -177,7 +177,7 @@ def load_config(cwd: str) -> dict[str, Any]:
     path = os.path.join(cwd, "ecko.yaml")
     if not os.path.isfile(path):
         return {}
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return _parse_yaml_subset(f.read())
 
 
@@ -229,3 +229,19 @@ def get_obsolete_terms(config: dict[str, Any]) -> list[dict[str, str]]:
     if isinstance(terms, list):
         return terms
     return []
+
+
+def get_blocked_commands(config: dict[str, Any]) -> list[dict[str, str]]:
+    """Return list of blocked command pattern dicts from config."""
+    patterns = config.get("blocked_commands", [])
+    if isinstance(patterns, list):
+        return patterns
+    return []
+
+
+def is_learnings_enabled(config: dict[str, Any]) -> bool:
+    """Check if the learnings nudge is enabled."""
+    learnings = config.get("learnings", {})
+    if isinstance(learnings, dict):
+        return bool(learnings.get("enabled", False))
+    return False

@@ -7,10 +7,17 @@ from pathlib import Path
 
 from checks.custom.banned_patterns import check_banned_patterns, check_obsolete_terms
 from checks.custom.duplicate_keys import check_duplicate_keys
+from checks.custom.test_quality import check_test_quality
 from checks.custom.unicode_artifacts import check_unicode_artifacts
 from checks.custom.unreachable_code import check_unreachable_code
 from checks.result import Echo
-from checks.runner import _is_standalone_comment, _normalize_path, filter_suppressed, is_excluded
+from checks.runner import (
+    _is_standalone_comment,
+    _is_test_file,
+    _normalize_path,
+    filter_suppressed,
+    is_excluded,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -360,3 +367,292 @@ class TestNormalizePath:
     def test_trailing_slash_normalized(self):
         result = _normalize_path("src/app.py", "/home/user/project/")
         assert result == os.path.normpath("/home/user/project/src/app.py")
+
+
+class TestIsTestFile:
+    def test_test_prefix(self):
+        assert _is_test_file("/proj/tests/test_foo.py")
+
+    def test_test_suffix(self):
+        assert _is_test_file("/proj/foo_test.py")
+
+    def test_helpers_not_test_file(self):
+        assert not _is_test_file("/proj/tests/helpers.py")
+
+    def test_utils_not_test_file(self):
+        assert not _is_test_file("/proj/test/utils.py")
+
+    def test_regular_file(self):
+        assert not _is_test_file("/proj/src/main.py")
+
+    def test_conftest(self):
+        assert _is_test_file("/proj/tests/conftest.py")
+
+    def test_conftest_at_root(self):
+        assert _is_test_file("/proj/conftest.py")
+
+
+class TestTestConditional:
+    def test_detects_if_in_test(self):
+        echoes = check_test_quality(str(FIXTURES / "test_conditional.py"))
+        conditional_echoes = [e for e in echoes if e.check == "test-conditional"]
+        assert len(conditional_echoes) == 1
+        assert conditional_echoes[0].line == 6  # the if result.startswith line
+
+    def test_clean_test_no_echoes(self):
+        echoes = check_test_quality(str(FIXTURES / "test_clean_test.py"))
+        assert echoes == []
+
+    def test_skips_name_main_guard(self, tmp_path):
+        f = tmp_path / "test_guard.py"
+        f.write_text(
+            'def test_foo():\n    assert True\n\n'
+            'if __name__ == "__main__":\n    test_foo()\n',
+            encoding="utf-8",
+        )
+        echoes = check_test_quality(str(f))
+        assert echoes == []
+
+    def test_skips_type_checking(self, tmp_path):
+        f = tmp_path / "test_types.py"
+        f.write_text(
+            "from typing import TYPE_CHECKING\n\n"
+            "def test_foo():\n"
+            "    if TYPE_CHECKING:\n"
+            "        pass\n"
+            "    assert True\n",
+            encoding="utf-8",
+        )
+        echoes = check_test_quality(str(f))
+        conditional_echoes = [e for e in echoes if e.check == "test-conditional"]
+        assert len(conditional_echoes) == 0
+
+    def test_skips_version_guard(self, tmp_path):
+        f = tmp_path / "test_compat.py"
+        f.write_text(
+            "import sys\n\n"
+            "def test_foo():\n"
+            "    if sys.version_info >= (3, 10):\n"
+            "        pass\n"
+            "    assert True\n",
+            encoding="utf-8",
+        )
+        echoes = check_test_quality(str(f))
+        conditional_echoes = [e for e in echoes if e.check == "test-conditional"]
+        assert len(conditional_echoes) == 0
+
+    def test_skips_version_info_subscript(self, tmp_path):
+        """sys.version_info[:2] >= (3, 13) should be treated as a version guard."""
+        f = tmp_path / "test_ver.py"
+        f.write_text(
+            "import sys\n\n"
+            "def test_foo():\n"
+            "    if sys.version_info[:2] >= (3, 13):\n"
+            "        pass\n"
+            "    assert True\n",
+            encoding="utf-8",
+        )
+        echoes = check_test_quality(str(f))
+        conditional_echoes = [e for e in echoes if e.check == "test-conditional"]
+        assert len(conditional_echoes) == 0
+
+    def test_skips_nested_function_conditional(self, tmp_path):
+        """Conditionals inside nested helper functions should not be flagged."""
+        f = tmp_path / "test_nested.py"
+        f.write_text(
+            "def test_with_helper():\n"
+            "    def helper(x):\n"
+            "        if x > 0:\n"
+            "            return x\n"
+            "        return 0\n"
+            "    assert helper(5) == 5\n",
+            encoding="utf-8",
+        )
+        echoes = check_test_quality(str(f))
+        conditional_echoes = [e for e in echoes if e.check == "test-conditional"]
+        assert len(conditional_echoes) == 0
+
+    def test_skips_nested_test_prefixed_function(self, tmp_path):
+        """A nested function named test_* should not be treated as a test."""
+        f = tmp_path / "test_click_style.py"
+        f.write_text(
+            "def test_prompts():\n"
+            "    def test_no():\n"
+            "        if confirm('Foo'):\n"
+            "            pass\n"
+            "    assert True\n",
+            encoding="utf-8",
+        )
+        echoes = check_test_quality(str(f))
+        conditional_echoes = [e for e in echoes if e.check == "test-conditional"]
+        assert len(conditional_echoes) == 0
+
+    def test_skips_skiptest_guard(self, tmp_path):
+        """Guard-then-skipTest clauses should not be flagged."""
+        f = tmp_path / "test_skip.py"
+        f.write_text(
+            "def test_guarded(self):\n"
+            "    if not hasattr(self, 'feature'):\n"
+            "        self.skipTest('feature not available')\n"
+            "    assert True\n",
+            encoding="utf-8",
+        )
+        echoes = check_test_quality(str(f))
+        conditional_echoes = [e for e in echoes if e.check == "test-conditional"]
+        assert len(conditional_echoes) == 0
+
+    def test_skips_pytest_skip_guard(self, tmp_path):
+        """Guard-then-pytest.skip clauses should not be flagged."""
+        f = tmp_path / "test_skip2.py"
+        f.write_text(
+            "import pytest\n\n"
+            "def test_guarded():\n"
+            "    if not some_condition:\n"
+            "        pytest.skip('not supported')\n"
+            "    assert True\n",
+            encoding="utf-8",
+        )
+        echoes = check_test_quality(str(f))
+        conditional_echoes = [e for e in echoes if e.check == "test-conditional"]
+        assert len(conditional_echoes) == 0
+
+    def test_skips_early_return_guard(self, tmp_path):
+        """Early return guards should not be flagged."""
+        f = tmp_path / "test_return.py"
+        f.write_text(
+            "def test_guarded():\n"
+            "    if not precondition:\n"
+            "        return\n"
+            "    assert True\n",
+            encoding="utf-8",
+        )
+        echoes = check_test_quality(str(f))
+        conditional_echoes = [e for e in echoes if e.check == "test-conditional"]
+        assert len(conditional_echoes) == 0
+
+    def test_skips_raise_pytest_skip(self, tmp_path):
+        """raise pytest.skip(...) should be treated as a guard clause."""
+        f = tmp_path / "test_raise_skip.py"
+        f.write_text(
+            "import pytest\n\n"
+            "def test_guarded():\n"
+            "    if 'VAR' in os.environ:\n"
+            "        raise pytest.skip('not in CI')\n"
+            "    assert True\n",
+            encoding="utf-8",
+        )
+        echoes = check_test_quality(str(f))
+        conditional_echoes = [e for e in echoes if e.check == "test-conditional"]
+        assert len(conditional_echoes) == 0
+
+    def test_skips_pytest_fail_guard(self, tmp_path):
+        """if condition: pytest.fail(...) should be treated as a guard."""
+        f = tmp_path / "test_fail_guard.py"
+        f.write_text(
+            "import pytest\n\n"
+            "def test_guarded():\n"
+            "    if not expected:\n"
+            "        pytest.fail('missing expected value')\n"
+            "    assert True\n",
+            encoding="utf-8",
+        )
+        echoes = check_test_quality(str(f))
+        conditional_echoes = [e for e in echoes if e.check == "test-conditional"]
+        assert len(conditional_echoes) == 0
+
+    def test_skips_os_name_guard(self, tmp_path):
+        """os.name == 'nt' should be treated as a platform guard."""
+        f = tmp_path / "test_os.py"
+        f.write_text(
+            "import os\n\n"
+            "def test_platform():\n"
+            "    if os.name != 'nt':\n"
+            "        assert True\n"
+            "    else:\n"
+            "        assert True\n",
+            encoding="utf-8",
+        )
+        echoes = check_test_quality(str(f))
+        conditional_echoes = [e for e in echoes if e.check == "test-conditional"]
+        assert len(conditional_echoes) == 0
+
+
+class TestFixedWait:
+    def test_detects_sleep(self):
+        echoes = check_test_quality(str(FIXTURES / "test_fixed_wait.py"))
+        wait_echoes = [e for e in echoes if e.check == "fixed-wait"]
+        assert len(wait_echoes) == 3  # time.sleep, asyncio.sleep, wait_for_timeout
+
+    def test_clean_test_no_waits(self):
+        echoes = check_test_quality(str(FIXTURES / "test_clean_test.py"))
+        wait_echoes = [e for e in echoes if e.check == "fixed-wait"]
+        assert wait_echoes == []
+
+    def test_skips_sleep_in_nested_function(self, tmp_path):
+        """Sleep inside nested helper functions should not be flagged."""
+        f = tmp_path / "test_nested_sleep.py"
+        f.write_text(
+            "import asyncio\n\n"
+            "def test_async_helper():\n"
+            "    async def simulate_work():\n"
+            "        await asyncio.sleep(0.1)\n"
+            "        return 'done'\n"
+            "    assert True\n",
+            encoding="utf-8",
+        )
+        echoes = check_test_quality(str(f))
+        wait_echoes = [e for e in echoes if e.check == "fixed-wait"]
+        assert wait_echoes == []
+
+    def test_skips_asyncio_sleep_zero(self, tmp_path):
+        """asyncio.sleep(0) is an event-loop yield, not a fixed wait."""
+        f = tmp_path / "test_yield.py"
+        f.write_text(
+            "import asyncio\n\n"
+            "async def test_yield():\n"
+            "    await asyncio.sleep(0)\n"
+            "    assert True\n",
+            encoding="utf-8",
+        )
+        echoes = check_test_quality(str(f))
+        wait_echoes = [e for e in echoes if e.check == "fixed-wait"]
+        assert wait_echoes == []
+
+    def test_skips_time_sleep_zero(self, tmp_path):
+        """time.sleep(0) is an idiomatic GIL yield, not a fixed wait."""
+        f = tmp_path / "test_yield2.py"
+        f.write_text(
+            "import time\n\n"
+            "def test_yield():\n"
+            "    time.sleep(0)\n"
+            "    assert True\n",
+            encoding="utf-8",
+        )
+        echoes = check_test_quality(str(f))
+        wait_echoes = [e for e in echoes if e.check == "fixed-wait"]
+        assert wait_echoes == []
+
+
+class TestMockSpecBypass:
+    def test_detects_bypass(self):
+        echoes = check_test_quality(str(FIXTURES / "test_mock_spec.py"))
+        mock_echoes = [e for e in echoes if e.check == "mock-spec-bypass"]
+        assert len(mock_echoes) == 2  # bypass_spec + magicmock_spec
+
+    def test_allows_return_value(self):
+        echoes = check_test_quality(str(FIXTURES / "test_mock_spec.py"))
+        mock_echoes = [e for e in echoes if e.check == "mock-spec-bypass"]
+        # return_value and side_effect should NOT be flagged
+        attrs_flagged = {e.message for e in mock_echoes}
+        assert not any("return_value" in m for m in attrs_flagged)
+        assert not any("side_effect" in m for m in attrs_flagged)
+
+    def test_no_spec_not_flagged(self):
+        echoes = check_test_quality(str(FIXTURES / "test_mock_spec.py"))
+        mock_echoes = [e for e in echoes if e.check == "mock-spec-bypass"]
+        # test_no_spec sets .anything on Mock() without spec — should not be flagged
+        assert not any("anything" in e.message for e in mock_echoes)
+
+    def test_nonexistent_file(self):
+        echoes = check_test_quality("/nonexistent/test_file.py")
+        assert echoes == []

@@ -37,10 +37,24 @@ exclude: []
   # - "generated/*"
   # - "*.min.js"
 
+# Blocked bash commands — PreToolUse hook blocks these patterns
+# Hardcoded (always active): git commit --no-verify, rm -rf /, rm -rf ~
+# Add your own patterns below:
+blocked_commands: []
+  # - pattern: "(pytest|npm test|cargo test).*\\|"
+  #   message: "Do not pipe test output — run tests directly for full context"
+  # - pattern: "git push.*--force(?!-with-lease)"
+  #   message: "Use --force-with-lease instead of --force"
+
+# Learnings system — nudge to write learnings when echoes are found on stop
+learnings:
+  enabled: false             # default: false
+
 # Disable specific built-in checks (by ecko check name)
 # Available checks: unused-imports, singleton-comparison, bare-except,
 #   star-imports, mutable-default-args, builtin-shadowing, empty-error-handlers,
 #   unreachable-code, debugger-statements, var-declarations, duplicate-keys,
 #   useless-catch, unicode-artifact, banned-pattern, obsolete-term,
-#   type-error, dead-code, unused-file, unused-export
+#   type-error, dead-code, unused-file, unused-export,
+#   test-conditional, fixed-wait, mock-spec-bypass
 disabled_checks: []
