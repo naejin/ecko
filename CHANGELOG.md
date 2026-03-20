@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.4.0
+
+CodeLeash-inspired workflow guardrails — deterministic constraints that catch mistakes before the developer sees them.
+
+### Test quality checks
+
+Three new AST-based checks for Python test files (`test_*.py`, `*_test.py`, `conftest.py`):
+
+- **`test-conditional`** — flags `if`/`else` inside test functions. Tests should control state, not branch on it. Guard clauses (platform checks, `pytest.skip`, early return) are automatically excluded.
+- **`fixed-wait`** — flags `time.sleep()`, `asyncio.sleep()`, and `wait_for_timeout()` in tests. Fixed waits are flaky — use polling or event-based assertions. `sleep(0)` (idiomatic yield) is excluded.
+- **`mock-spec-bypass`** — flags attribute assignment on `Mock(spec=...)` / `MagicMock(spec=...)` objects that bypasses spec validation. Standard mock attributes (`return_value`, `side_effect`, etc.) are excluded.
+
+### Bash command blocking
+
+New PreToolUse hook blocks dangerous bash commands before execution (exit code 2 = block):
+
+- **Built-in blocks** (always active): `git commit --no-verify`, `rm -rf /`, `rm -rf ~`
+- **User-configurable** via `blocked_commands` in `ecko.yaml` — add project-specific patterns
+
+### Plan-mode awareness
+
+ExitPlanMode hook reminds the agent to include test steps for all code changes in the plan.
+
+### Learnings nudge
+
+When the stop hook finds echoes (something went wrong), it nudges the agent to write a brief learnings file at `.ecko-learnings/`. Opt-in via `learnings.enabled: true` in `ecko.yaml`.
+
+### `/ecko:tune` command
+
+Analyzes `.ecko-learnings/` files and codebase patterns, then recommends specific `ecko.yaml` rules: banned patterns, obsolete terms, blocked commands, and CLAUDE.md improvements.
+
+### Other improvements
+
+- **`.pyi` exclusion** — type stubs are skipped from all linting (they exist for type checkers, not runtime)
+- **UTF-8 encoding** — `config.py` and `runner.py` now explicitly use `encoding="utf-8"` for all file reads (prevents cp1252 failures on Windows)
+
+### Tests
+
+167 total (54 new) — covering test quality checks, bash guard blocking, and edge cases. Validated across 42 open-source repos.
+
 ## v0.3.1
 
 ### Bug fixes

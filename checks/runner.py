@@ -16,10 +16,12 @@ from fnmatch import fnmatch
 
 from checks.config import (
     get_banned_patterns,
+    get_blocked_commands,
     get_disabled_checks,
     get_exclude_patterns,
     get_obsolete_terms,
     is_deep_enabled,
+    is_learnings_enabled,
     load_config,
 )
 from checks.result import Echo, emit, format_file_echoes, format_stop_echoes
@@ -55,6 +57,12 @@ LANG_MAP = {
 def detect_language(file_path: str) -> str:
     ext = Path(file_path).suffix.lower()
     return LANG_MAP.get(ext, "unknown")
+
+
+def _is_test_file(file_path: str) -> bool:
+    """Check if a file is a Python test file (by filename convention)."""
+    name = os.path.basename(file_path)
+    return name.startswith("test_") or name.endswith("_test.py") or name == "conftest.py"
 
 
 def is_excluded(file_path: str, cwd: str, user_excludes: list[str]) -> bool:
@@ -102,7 +110,7 @@ def filter_suppressed(echoes: list[Echo], file_path: str) -> list[Echo]:
     if not echoes or not os.path.isfile(file_path):
         return echoes
     try:
-        with open(file_path) as f:
+        with open(file_path, encoding="utf-8") as f:
             lines = f.readlines()
     except (OSError, UnicodeDecodeError):
         return echoes
@@ -148,6 +156,10 @@ def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
     if not os.path.isfile(file_path):
         return 0
 
+    # Type stubs (.pyi) exist for type checkers, not runtime — skip linting
+    if file_path.endswith(".pyi"):
+        return 0
+
     config = load_config(cwd)
     if is_excluded(file_path, cwd, get_exclude_patterns(config)):
         return 0
@@ -180,6 +192,11 @@ def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
 
         echoes.extend(check_duplicate_keys(file_path))
         echoes.extend(check_unreachable_code(file_path))
+
+        if _is_test_file(file_path):
+            from checks.custom.test_quality import check_test_quality
+
+            echoes.extend(check_test_quality(file_path))
 
     # Custom checks (universal)
     from checks.custom.unicode_artifacts import check_unicode_artifacts
@@ -284,6 +301,11 @@ def run_stop(cwd: str, plugin_root: str) -> int:
 
             echoes.extend(check_duplicate_keys(file_path))
             echoes.extend(check_unreachable_code(file_path))
+
+            if _is_test_file(file_path):
+                from checks.custom.test_quality import check_test_quality
+
+                echoes.extend(check_test_quality(file_path))
         elif lang in ("typescript", "javascript"):
             from checks.tools.biome_adapter import run_biome
 
@@ -331,9 +353,81 @@ def run_stop(cwd: str, plugin_root: str) -> int:
         if not all_echoes[path]:
             del all_echoes[path]
 
-    if all_echoes:
+    has_echoes = bool(all_echoes)
+
+    if has_echoes:
         emit(format_stop_echoes(all_echoes))
+
+    # Learnings nudge — only when echoes were found (something went wrong)
+    if has_echoes and is_learnings_enabled(config):
+        emit(
+            "\n~~ ecko ~~ If you encountered anything surprising about this "
+            "codebase, write a brief learnings file at "
+            ".ecko-learnings/{date}-{slug}.md. Include: "
+            "1) Surprises about naming, structure, or conventions "
+            "2) Things that tripped you up "
+            "3) Suggestions for guardrails or checks that would have helped.\n"
+        )
+
+    if has_echoes:
         return 1
+    return 0
+
+
+def check_bash_command(
+    command: str, user_patterns: list[dict[str, str]]
+) -> str | None:
+    """Check a bash command against blocked patterns.
+
+    Returns the block message if the command should be blocked, or None if allowed.
+    """
+    import re
+
+    # Hardcoded patterns (always active, truly dangerous)
+    hardcoded = [
+        {
+            "pattern": r"git\b.*--no-verify",
+            "message": "Blocked: --no-verify skips hooks — remove it to let ecko checks run",
+        },
+        {
+            "pattern": r"\brm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+/(\s|$|;|&|\|)",
+            "message": "Blocked: rm -rf / is catastrophic — specify a subdirectory",
+        },
+        {
+            "pattern": r"\brm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+~(\s|$|;|&|\||/)",
+            "message": "Blocked: rm -rf ~ would delete the home directory",
+        },
+    ]
+
+    for entry in hardcoded + user_patterns:
+        pattern = entry.get("pattern", "")
+        message = entry.get("message", "Command blocked by ecko")
+        if not pattern:
+            continue
+        try:
+            if re.search(pattern, command):
+                return message
+        except re.error:
+            continue
+    return None
+
+
+def run_pre_tool_use_bash(cwd: str) -> int:
+    """Check a bash command from stdin and block if it matches dangerous patterns.
+
+    Exit 2 = block (PreToolUse convention), exit 0 = allow.
+    """
+    command = sys.stdin.read().strip()
+    if not command:
+        return 0
+
+    config = load_config(cwd)
+    user_patterns = get_blocked_commands(config)
+    result = check_bash_command(command, user_patterns)
+
+    if result:
+        emit(f"~~ ecko ~~ {result}\n")
+        return 2
     return 0
 
 
@@ -390,7 +484,7 @@ def main() -> None:
     parser.add_argument("--file", help="File to check (PostToolUse mode)")
     parser.add_argument(
         "--mode",
-        choices=["post-tool-use", "stop"],
+        choices=["post-tool-use", "stop", "pre-tool-use-bash"],
         required=True,
         help="Run mode",
     )
@@ -405,6 +499,8 @@ def main() -> None:
         sys.exit(run_post_tool_use(args.file, args.cwd, args.plugin_root))
     elif args.mode == "stop":
         sys.exit(run_stop(args.cwd, args.plugin_root))
+    elif args.mode == "pre-tool-use-bash":
+        sys.exit(run_pre_tool_use_bash(args.cwd))
 
 
 if __name__ == "__main__":

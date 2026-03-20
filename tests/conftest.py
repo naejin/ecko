@@ -7,6 +7,9 @@ from pathlib import Path
 
 import pytest
 
+# Fixture files are test-quality check fixtures, not actual tests
+collect_ignore_glob = ["fixtures/*"]
+
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
