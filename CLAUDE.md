@@ -34,6 +34,13 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Test file detection is filename-only (`test_*.py`, `*_test.py`, `conftest.py`) — never directory-based (avoids running test checks on `tests/helpers.py`)
 - AST checks on test functions use `_iter_test_functions` (module + class level only) — never `ast.walk(tree)` which finds nested `test_*`-prefixed helpers
 - `.pyi` type stubs are skipped from all linting (they exist for type checkers, not runtime)
+- `.test-d.ts` tsd assertion files are skipped via `_is_skippable_stub()` in runner.py — same skip as `.pyi`
+- All adapters use `emit()` from `result.py` for stderr output — never `sys.stderr.write` directly
+- Pyright is a Python tool: use `resolve_python_tool("pyright")`, NOT `resolve_node_tool` (despite npm availability)
+- Layer 2 checks live in `_run_layer2_checks()` — add new checks there, not in `run_post_tool_use()` or `run_stop()` separately
+- JS/TS import extraction (`_extract_js_imports`) skips commented-out imports via `_is_in_js_comment()` heuristic
+- `_safe_regex_compile()` caches compiled patterns in `_compiled_cache` — each pattern compiled at most once per process
+- Fixture cache (`_fixture_cache`) stores `(paths, mtime, names)` — compares path lists to detect new conftest.py files
 
 ## Noise reduction (v0.5.0)
 - `builtin-shadowing` (ruff A001/A002): 20-name default allowlist filters idiomatic API params (`type`, `help`, `input`, `format`, `id`, `repr`, `ascii`, etc.). Configurable via `builtin_shadow_allowlist` in ecko.yaml — user list replaces default entirely
@@ -59,7 +66,6 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `singleton-comparison` in test files: `== True`/`== False` in test assertions is intentional equality testing
 - Pyright "unknown import symbol": not yet filtered (only "could not be resolved" is filtered)
 - Vulture FastAPI DI params: route handler params injected by framework are flagged as unused
-- Chalk `.test-d.ts` files: tsd type assertion files have intentionally "unused" imports
 
 ## Cross-platform gotchas
 - Always `open()` with `encoding="utf-8"` — Windows Python 3.10/3.12 defaults to cp1252, which silently fails on UTF-8 multi-byte chars (e.g. smart quotes contain byte 0x9d, undefined in cp1252)
@@ -67,6 +73,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Line offset math must find `\n` in raw source, not assume `len(line) + 1` — CRLF-safe
 - Shell hooks: use `printf '%s' "$VAR"` not `echo "$VAR"` — echo handles escape sequences inconsistently across platforms
 - Shell hooks: always include `set -euo pipefail` for consistency, even in trivial scripts
+- Integration tests that assert on clean output (`output == ""`) must tolerate tool warnings — on Windows, tools may resolve via npx but fail with WinError 2
 
 ## Code style
 - All modules use `from __future__ import annotations`
@@ -74,14 +81,18 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Tool adapters follow a pattern: `run_<tool>(args) -> list[Echo]` (per-file) or `-> dict[str, list[Echo]]` (multi-file)
 - Custom checks follow: `check_<name>(file_path) -> list[Echo]`
 - Graceful skip: resolver returns None → return empty list, never error. Never call `shutil.which()` directly in adapters.
+- Adapter error handling: catch `TimeoutExpired` and `OSError` separately, call `emit()` with descriptive warning, return empty
+- BFS queues: use `collections.deque` with `popleft()`, never `list.pop(0)` (O(n) per pop)
 
 ## Adding a new check
-- Tool adapter: add `checks/tools/<name>_adapter.py`, wire into `runner.py` per-file or stop mode
-- Custom check: add `checks/custom/<name>.py`, wire into `runner.py` under Layer 2
+- Tool adapter: add `checks/tools/<name>_adapter.py`, wire into `_run_layer2_checks()` in runner.py
+- Custom check: add `checks/custom/<name>.py`, wire into `_run_layer2_checks()` in runner.py
 - Register the check name in `ecko.yaml.example` disabled_checks comment
 - For AST-based checks on test functions: use `_iter_test_functions()` + `_walk_shallow()` to avoid nested function/class false positives
 - Guard clause filters (in `_is_guard_clause`): skip `self.skipTest`, `pytest.skip/fail`, `raise pytest.skip`, early return, platform guards (`os.name`, `sys.version_info`, `sys.platform`)
 - Regex patterns in bash guard: avoid `$` anchors (bypassed by trailing args), use `(\s|$|;|&|\|)` terminators instead
+- Bash guard `--force` pattern: must match both `--force` and `-f`; use command-wide `(?!.*--force-with-lease)` lookahead, not position-specific `(?!-with-lease)`
+- ReDoS test inputs: `"a" * 25 + "!"` triggers catastrophic backtracking for `(a+)+b`; `"a" * N + "c"` does NOT (engine fails fast). Always add wall-clock assertion with `time.monotonic()`
 
 ## Testing
 - Smoke test: `python3 checks/runner.py --file <path> --mode post-tool-use --cwd <dir> --plugin-root .`
@@ -105,6 +116,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Update version badge in `README.md`
 - Add entry to `CHANGELOG.md`
 - Push and wait for CI green on all 6 matrix jobs before tagging
+- If CI fails, fix and push again — do NOT tag until all 6 jobs are green (the v0.6.0 release needed a Windows CI fix before tagging)
 - Tag, push tag, `gh release create v{X} --title "..." --notes-file /tmp/release-notes.md` (flag is `-F`/`--notes-file`, NOT `--body`)
 - Verify with: `curl -fsSL https://raw.githubusercontent.com/naejin/ecko/main/scripts/install.sh | bash`
 
