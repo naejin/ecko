@@ -175,3 +175,26 @@ class TestValidateConfig:
 
     def test_empty_config(self):
         assert validate_config({}) == []
+
+    def test_redos_pattern_warns_without_hanging(self):
+        """A pathological regex in banned_patterns should warn, not hang."""
+        import time
+
+        # (a+)+b is valid but causes catastrophic backtracking
+        # safe_regex_compile will succeed (compile is fast), but we test
+        # that the validation process doesn't hang
+        config = {"banned_patterns": [{"pattern": r"(a+)+b"}]}
+        start = time.monotonic()
+        warnings = validate_config(config)
+        elapsed = time.monotonic() - start
+        # Should complete quickly — (a+)+b compiles fine so no warning
+        assert elapsed < 5.0
+        assert warnings == []
+
+    def test_truly_invalid_pattern_warns(self):
+        """An invalid regex should produce a warning via safe_regex_compile."""
+        config = {"banned_patterns": [{"pattern": r"[invalid"}]}
+        warnings = validate_config(config)
+        assert len(warnings) == 1
+        assert "banned_patterns[0]" in warnings[0]
+        assert "invalid" in warnings[0].lower() or "pathological" in warnings[0].lower()

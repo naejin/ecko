@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from checks.regex_utils import safe_regex_compile
+
 
 def _parse_yaml_subset(text: str) -> dict[str, Any]:
     """Parse a minimal YAML subset into a dict.
@@ -362,8 +364,6 @@ def validate_config(config: dict[str, Any]) -> list[str]:
     - Unknown top-level keys (possible typos)
     - Invalid regex patterns in banned_patterns and blocked_commands
     """
-    import re
-
     warnings: list[str] = []
 
     # Check for unknown keys
@@ -378,23 +378,23 @@ def validate_config(config: dict[str, Any]) -> list[str]:
             else:
                 warnings.append(f"unknown config key '{key}'")
 
-    # Validate regex patterns in banned_patterns
+    # Validate regex patterns in banned_patterns (with ReDoS timeout protection)
     for i, rule in enumerate(get_banned_patterns(config)):
         pattern = rule.get("pattern", "")
         if pattern:
-            try:
-                re.compile(pattern)
-            except re.error as e:
-                warnings.append(f"invalid regex in banned_patterns[{i}]: {e}")
+            if safe_regex_compile(pattern) is None:
+                warnings.append(
+                    f"invalid or pathological regex in banned_patterns[{i}]: {pattern!r}"
+                )
 
-    # Validate regex patterns in blocked_commands
+    # Validate regex patterns in blocked_commands (with ReDoS timeout protection)
     for i, rule in enumerate(get_blocked_commands(config)):
         pattern = rule.get("pattern", "")
         if pattern:
-            try:
-                re.compile(pattern)
-            except re.error as e:
-                warnings.append(f"invalid regex in blocked_commands[{i}]: {e}")
+            if safe_regex_compile(pattern) is None:
+                warnings.append(
+                    f"invalid or pathological regex in blocked_commands[{i}]: {pattern!r}"
+                )
 
     return warnings
 

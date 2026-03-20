@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.6.1
+
+Tech debt reduction plus reverb/tune UX fixes.
+
+### Commands
+
+- **`/ecko:reverb` (new)** — dedicated slash command to capture what went wrong; writes a structured note to `.ecko-reverb/`
+- **`/ecko:tune` (rewritten)** — presents recommendations as an interactive numbered list; user selects which items to apply; processed reverb notes are cleaned up automatically
+- **Reverb tip simplified** — stop-mode reverb nudge replaced with a single-line tip (`tip: run /ecko:reverb to capture what went wrong`) to prevent agent write loops
+
+### Internals
+
+- **Shared `checks/regex_utils.py`** — unified ReDoS-safe `safe_regex_compile`, `safe_regex_search`, `safe_regex_finditer` with thread-based timeout. Replaces two independent implementations in `runner.py` and `banned_patterns.py`.
+- **Shared `checks/fileutil.py`** — canonical `is_test_file()` predicate. Now includes `conftest.pyi` (previously only in vulture adapter).
+- **Thread-explosion fix** — `check_banned_patterns` now uses `finditer` over the full source (1 thread per pattern) instead of per-line search (1 thread per line per pattern). 500-line file × 3 patterns: 1,500 threads → 3 threads.
+- **Bash guard broadened** — `git push --force`, `git reset --hard`, `git clean -f` patterns now catch any git global options (`--git-dir`, `--work-tree`, `-c`, `--bare`, etc.), not just `-C`.
+- **Config warning dedup** — `_emit_config_warnings` now emits once per cwd per session instead of on every hook invocation.
+- **Tri-state removal** — `_run_layer2_checks` signature changed from `bool | None` to `bool` for `ruff_available`/`biome_available`. Callers pre-resolve availability.
+- **Config validation ReDoS-safe** — `validate_config()` uses `safe_regex_compile()` instead of bare `re.compile()` for user-supplied patterns.
+- **CRLF preservation** — `_strip_trailing_whitespace` now preserves `\r\n` and `\r` line endings instead of silently converting to `\n`.
+- **Timeout cache fix** — `safe_regex_compile` no longer permanently caches `None` for timed-out patterns; only genuine `re.error` failures are cached.
+- **`_run_with_timeout` helper** — all three regex utility functions share a single thread-management implementation.
+
+### Tests
+
+- New `tests/test_regex_utils.py` — 11 tests covering compile, search, finditer, caching, ReDoS timeout.
+- Bash guard: 7 new tests for `--git-dir`, `--work-tree`, `-c`, `--bare` bypass variants.
+- Banned patterns: finditer line number accuracy, empty file, single-line edge case.
+- Config: ReDoS pattern validation, dedup same/different cwd.
+- Total: 314 tests (up from 285).
+
 ## v0.6.0
 
 Transparency & trust — when ecko runs, users always know what happened. Silent failures are gone, duplicate code is eliminated, and tool adapters have unit tests.

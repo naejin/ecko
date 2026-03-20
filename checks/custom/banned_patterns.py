@@ -2,55 +2,12 @@
 
 from __future__ import annotations
 
+import bisect
 import fnmatch
 import os
-import re
-import threading
 
+from checks.regex_utils import safe_regex_compile, safe_regex_finditer
 from checks.result import Echo
-
-
-def _safe_regex_search(pattern: re.Pattern[str], text: str) -> bool:
-    """Run regex search with a timeout to guard against ReDoS."""
-    result: list[bool] = [False]
-
-    def _search() -> None:
-        try:
-            result[0] = bool(pattern.search(text))
-        except re.error:
-            result[0] = False
-
-    t = threading.Thread(target=_search, daemon=True)
-    t.start()
-    t.join(timeout=0.5)
-    return False if t.is_alive() else result[0]
-
-
-_compiled_cache: dict[str, re.Pattern[str] | None] = {}
-
-
-def _safe_regex_compile(pattern_str: str, timeout_ms: int = 500) -> re.Pattern[str] | None:
-    """Compile a regex with a timeout to guard against ReDoS at compile time.
-
-    Results are cached by pattern string — each unique pattern is compiled at most once.
-    """
-    if pattern_str in _compiled_cache:
-        return _compiled_cache[pattern_str]
-
-    result: list[re.Pattern[str] | None] = [None]
-
-    def _compile() -> None:
-        try:
-            result[0] = re.compile(pattern_str)
-        except re.error:
-            result[0] = None
-
-    t = threading.Thread(target=_compile, daemon=True)
-    t.start()
-    t.join(timeout=timeout_ms / 1000.0)
-    compiled = None if t.is_alive() else result[0]
-    _compiled_cache[pattern_str] = compiled
-    return compiled
 
 
 def check_banned_patterns(
@@ -59,9 +16,18 @@ def check_banned_patterns(
     """Check file against banned regex patterns from config."""
     try:
         with open(file_path, encoding="utf-8") as f:
-            lines = f.readlines()
+            source = f.read()
     except (OSError, UnicodeDecodeError):
         return []
+
+    if not source:
+        return []
+
+    # Build line-start offset table for bisect lookup
+    line_starts = [0]
+    for i, ch in enumerate(source):
+        if ch == "\n":
+            line_starts.append(i + 1)
 
     basename = os.path.basename(file_path)
     rel_path = ""
@@ -87,19 +53,21 @@ def check_banned_patterns(
             ):
                 continue
 
-        regex = _safe_regex_compile(pattern_str)
+        regex = safe_regex_compile(pattern_str)
         if regex is None:
             continue
 
-        for line_num, line in enumerate(lines, 1):
-            if _safe_regex_search(regex, line):
-                echoes.append(
-                    Echo(
-                        check="banned-pattern",
-                        line=line_num,
-                        message=message,
-                    )
+        # One thread per pattern via finditer (not per line)
+        matches = safe_regex_finditer(regex, source)
+        for m in matches:
+            line_num = bisect.bisect_right(line_starts, m.start())
+            echoes.append(
+                Echo(
+                    check="banned-pattern",
+                    line=line_num,
+                    message=message,
                 )
+            )
 
     return echoes
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import os
+from collections import deque
 
 from checks.result import Echo
 
@@ -133,8 +134,6 @@ def _is_pytest_call(node: ast.expr, method: str) -> bool:
 
 def _walk_shallow(node: ast.AST) -> list[ast.AST]:
     """Walk AST children without descending into nested function/class defs."""
-    from collections import deque
-
     result: list[ast.AST] = []
     queue = deque(ast.iter_child_nodes(node))
     while queue:

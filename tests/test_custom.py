@@ -11,9 +11,9 @@ from checks.custom.test_quality import check_test_quality
 from checks.custom.unicode_artifacts import check_unicode_artifacts
 from checks.custom.unreachable_code import check_unreachable_code
 from checks.result import Echo
+from checks.fileutil import is_test_file
 from checks.runner import (
     _is_standalone_comment,
-    _is_test_file,
     _normalize_path,
     filter_suppressed,
     is_excluded,
@@ -389,25 +389,28 @@ class TestNormalizePath:
 
 class TestIsTestFile:
     def test_test_prefix(self):
-        assert _is_test_file("/proj/tests/test_foo.py")
+        assert is_test_file("/proj/tests/test_foo.py")
 
     def test_test_suffix(self):
-        assert _is_test_file("/proj/foo_test.py")
+        assert is_test_file("/proj/foo_test.py")
 
     def test_helpers_not_test_file(self):
-        assert not _is_test_file("/proj/tests/helpers.py")
+        assert not is_test_file("/proj/tests/helpers.py")
 
     def test_utils_not_test_file(self):
-        assert not _is_test_file("/proj/test/utils.py")
+        assert not is_test_file("/proj/test/utils.py")
 
     def test_regular_file(self):
-        assert not _is_test_file("/proj/src/main.py")
+        assert not is_test_file("/proj/src/main.py")
 
     def test_conftest(self):
-        assert _is_test_file("/proj/tests/conftest.py")
+        assert is_test_file("/proj/tests/conftest.py")
 
     def test_conftest_at_root(self):
-        assert _is_test_file("/proj/conftest.py")
+        assert is_test_file("/proj/conftest.py")
+
+    def test_conftest_pyi(self):
+        assert is_test_file("/proj/tests/conftest.pyi")
 
 
 class TestTestConditional:
@@ -674,3 +677,101 @@ class TestMockSpecBypass:
     def test_nonexistent_file(self):
         echoes = check_test_quality("/nonexistent/test_file.py")
         assert echoes == []
+
+
+class TestBannedPatternsFinditer:
+    """Test that banned patterns use finditer with correct line numbers."""
+
+    def test_correct_line_numbers(self, tmp_path):
+        target = tmp_path / "sample.py"
+        target.write_text("line1\nTODO fix this\nline3\nTODO another\n")
+        patterns = [{"pattern": r"TODO", "message": "No TODOs"}]
+        echoes = check_banned_patterns(str(target), patterns)
+        assert len(echoes) == 2
+        assert echoes[0].line == 2
+        assert echoes[1].line == 4
+
+    def test_empty_file(self, tmp_path):
+        target = tmp_path / "empty.py"
+        target.write_text("")
+        patterns = [{"pattern": r"TODO", "message": "No TODOs"}]
+        echoes = check_banned_patterns(str(target), patterns)
+        assert echoes == []
+
+    def test_single_line_no_newline(self, tmp_path):
+        target = tmp_path / "single.py"
+        target.write_text("TODO fix")
+        patterns = [{"pattern": r"TODO", "message": "No TODOs"}]
+        echoes = check_banned_patterns(str(target), patterns)
+        assert len(echoes) == 1
+        assert echoes[0].line == 1
+
+
+class TestConfigWarningDedup:
+    """Config warnings should emit once per cwd."""
+
+    def test_dedup_same_cwd(self, tmp_path):
+        from checks.runner import _config_warned
+
+        cwd = str(tmp_path / "dedup_test_same")
+        _config_warned.discard(cwd)  # Ensure clean state
+
+        config = {"zzz_unknown_key": True}
+
+        import io
+        import sys
+
+        # First call — should emit
+        buf1 = io.StringIO()
+        old = sys.stderr
+        sys.stderr = buf1
+        try:
+            from checks.runner import _emit_config_warnings
+            _emit_config_warnings(config, cwd)
+        finally:
+            sys.stderr = old
+        assert "zzz_unknown_key" in buf1.getvalue()
+
+        # Second call — should NOT emit (deduped)
+        buf2 = io.StringIO()
+        sys.stderr = buf2
+        try:
+            _emit_config_warnings(config, cwd)
+        finally:
+            sys.stderr = old
+        assert buf2.getvalue() == ""
+
+        _config_warned.discard(cwd)  # Cleanup
+
+    def test_different_cwds_both_emit(self, tmp_path):
+        from checks.runner import _config_warned, _emit_config_warnings
+
+        cwd1 = str(tmp_path / "dedup_test_a")
+        cwd2 = str(tmp_path / "dedup_test_b")
+        _config_warned.discard(cwd1)
+        _config_warned.discard(cwd2)
+
+        config = {"zzz_unknown_key": True}
+
+        import io
+        import sys
+
+        buf1 = io.StringIO()
+        old = sys.stderr
+        sys.stderr = buf1
+        try:
+            _emit_config_warnings(config, cwd1)
+        finally:
+            sys.stderr = old
+        assert "zzz_unknown_key" in buf1.getvalue()
+
+        buf2 = io.StringIO()
+        sys.stderr = buf2
+        try:
+            _emit_config_warnings(config, cwd2)
+        finally:
+            sys.stderr = old
+        assert "zzz_unknown_key" in buf2.getvalue()
+
+        _config_warned.discard(cwd1)
+        _config_warned.discard(cwd2)

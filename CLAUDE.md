@@ -8,8 +8,8 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `.claude-plugin/plugin.json` — plugin manifest
 - `hooks/hooks.json` — PreToolUse(Bash, ExitPlanMode) + PostToolUse(Write|Edit) + Stop hook wiring
 - `hooks/*.sh` — shell entry points that delegate to `checks/runner.py`
-- `checks/` — Python package: runner, config, result, formatter, tools/, custom/
-- `commands/` — slash commands (ping, status, setup, tune)
+- `checks/` — Python package: runner, config, result, formatter, regex_utils, fileutil, tools/, custom/
+- `commands/` — slash commands (ping, status, setup, tune, reverb)
 - `config/biome.json` — biome lint config (only ecko's rules enabled)
 - `scripts/` — install scripts (bash + powershell)
 - `tests/` — pytest suite with fixtures/
@@ -17,6 +17,10 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `CHANGELOG.md` — version history for all releases
 
 ## Design constraints
+- `checks/regex_utils.py` is a pure utility (imports only `re` + `threading` + `typing`) — no `emit()`, no I/O. All ReDoS-safe regex goes through it. `_run_with_timeout` is the shared thread helper; `_SENTINEL` distinguishes timeout from function-returned-None.
+- `checks/fileutil.py` is a pure utility (imports only `os`) — canonical test-file predicate, single source of truth
+- `banned_patterns` uses `safe_regex_finditer` over full source (1 thread per pattern, not per line) with `bisect` for line numbers
+- Config warnings deduplicated per cwd via `_config_warned` set in runner.py
 - Zero Python dependencies — config.py has a minimal YAML subset parser (no PyYAML)
 - YAML parser `_parse_list_block` supports nested lists via `last_empty_key` tracking — highest-risk code path, add regression tests for any changes (test all config sections parse correctly after edits)
 - Tools auto-resolve via `checks/tools/resolve.py`: PATH first → `uvx`/`pipx run` (Python) → `npx`/`pnpx` (Node)
@@ -31,7 +35,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Builtin-shadowing filtered by configurable allowlist in ruff adapter (20-name default)
 - Echo cap per check per file applied in result formatters, not in runner — cap is display-only, doesn't affect detection
 - Config values (`shadow_allowlist`, `echo_cap`, `import_rules`) computed once before file loops in runner.py — never inside per-file loops (same config, no need to recompute)
-- Test file detection is filename-only (`test_*.py`, `*_test.py`, `conftest.py`) — never directory-based (avoids running test checks on `tests/helpers.py`)
+- Test file detection is filename-only (`test_*.py`, `*_test.py`, `conftest.py`, `conftest.pyi`) via `checks/fileutil.is_test_file()` — never directory-based (avoids running test checks on `tests/helpers.py`)
 - AST checks on test functions use `_iter_test_functions` (module + class level only) — never `ast.walk(tree)` which finds nested `test_*`-prefixed helpers
 - `.pyi` type stubs are skipped from all linting (they exist for type checkers, not runtime)
 - `.test-d.ts` tsd assertion files are skipped via `_is_skippable_stub()` in runner.py — same skip as `.pyi`
@@ -39,7 +43,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Pyright is a Python tool: use `resolve_python_tool("pyright")`, NOT `resolve_node_tool` (despite npm availability)
 - Layer 2 checks live in `_run_layer2_checks()` — add new checks there, not in `run_post_tool_use()` or `run_stop()` separately
 - JS/TS import extraction (`_extract_js_imports`) skips commented-out imports via `_is_in_js_comment()` heuristic
-- `_safe_regex_compile()` caches compiled patterns in `_compiled_cache` — each pattern compiled at most once per process
+- `safe_regex_compile()` in `checks/regex_utils.py` caches compiled patterns in `_compiled_cache` — each pattern compiled at most once per process. Timeouts are NOT cached (allow retry); only `re.error` failures cache `None`.
 - Fixture cache (`_fixture_cache`) stores `(paths, mtime, names)` — compares path lists to detect new conftest.py files
 
 ## Noise reduction (v0.5.0)
@@ -71,6 +75,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Always `open()` with `encoding="utf-8"` — Windows Python 3.10/3.12 defaults to cp1252, which silently fails on UTF-8 multi-byte chars (e.g. smart quotes contain byte 0x9d, undefined in cp1252)
 - Test assertions on paths must use `os.path.normpath()` — Windows normalizes `/` to `\`
 - Line offset math must find `\n` in raw source, not assume `len(line) + 1` — CRLF-safe
+- `_strip_trailing_whitespace` must check `\r\n` before `\n` (`.rstrip()` strips `\r` too) — preserves original line endings
 - Shell hooks: use `printf '%s' "$VAR"` not `echo "$VAR"` — echo handles escape sequences inconsistently across platforms
 - Shell hooks: always include `set -euo pipefail` for consistency, even in trivial scripts
 - Integration tests that assert on clean output (`output == ""`) must tolerate tool warnings — on Windows, tools may resolve via npx but fail with WinError 2
@@ -132,8 +137,8 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Import-layer echoes report actual line numbers (AST lineno for Python, regex offset for JS/TS)
 
 ## Current version and next milestone
-- Current: v0.6.0 (transparency + trust)
-- Previous: v0.5.1 (trust + safety + performance)
+- Current: v0.6.1 (tech debt + reverb/tune UX)
+- Previous: v0.6.0 (transparency + trust)
 
 ## Not part of the plugin
 - `docs/ideas/` — internal ideation (gitignored)

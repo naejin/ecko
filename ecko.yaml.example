@@ -80,8 +80,8 @@ blocked_commands: []
   # - pattern: "git push.*--force(?!-with-lease)"
   #   message: "Use --force-with-lease instead of --force"
 
-# Reverb — nudge agent to leave reverb notes when echoes are found on stop
-# Notes are written to .ecko-reverb/{date}-{slug}.md and consumed by /ecko:tune
+# Reverb — show a tip to run /ecko:reverb when echoes are found on stop
+# Use /ecko:reverb to capture session notes, then /ecko:tune to turn them into rules
 reverb:
   enabled: false             # default: false
 

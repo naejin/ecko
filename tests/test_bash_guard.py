@@ -185,6 +185,36 @@ class TestBashGuardHardcoded:
         result = check_bash_command("git -C /a -C /b reset --hard", [])
         assert result is not None
 
+    # --- Global option bypass variants (Step 6: broadened patterns) ---
+
+    def test_blocks_git_git_dir_push_force(self):
+        result = check_bash_command("git --git-dir=/path push --force", [])
+        assert result is not None
+
+    def test_blocks_git_work_tree_push_force(self):
+        result = check_bash_command("git --work-tree=/path push --force", [])
+        assert result is not None
+
+    def test_blocks_git_config_push_force(self):
+        result = check_bash_command("git -c user.name=x push --force", [])
+        assert result is not None
+
+    def test_blocks_git_bare_reset_hard(self):
+        result = check_bash_command("git --bare reset --hard", [])
+        assert result is not None
+
+    def test_blocks_git_bare_clean_f(self):
+        result = check_bash_command("git --bare clean -f", [])
+        assert result is not None
+
+    def test_blocks_git_git_dir_reset_hard(self):
+        result = check_bash_command("git --git-dir=/repo reset --hard", [])
+        assert result is not None
+
+    def test_blocks_git_work_tree_clean_fd(self):
+        result = check_bash_command("git --work-tree=/repo clean -fd", [])
+        assert result is not None
+
 
 class TestBashGuardUserPatterns:
     """Tests for user-configurable blocked patterns."""

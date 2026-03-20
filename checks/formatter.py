@@ -55,8 +55,12 @@ def _strip_trailing_whitespace(file_path: str) -> None:
         lines = original.splitlines(True)
         cleaned = []
         for line in lines:
-            if line.endswith("\n"):
+            if line.endswith("\r\n"):
+                cleaned.append(line[:-2].rstrip() + "\r\n")
+            elif line.endswith("\n"):
                 cleaned.append(line[:-1].rstrip() + "\n")
+            elif line.endswith("\r"):
+                cleaned.append(line[:-1].rstrip() + "\r")
             else:
                 cleaned.append(line.rstrip())
         result = "".join(cleaned)

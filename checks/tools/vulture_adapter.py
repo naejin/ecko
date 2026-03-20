@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 
+from checks.fileutil import is_test_file
 from checks.result import Echo, emit
 from checks.tools.resolve import resolve_python_tool
 
@@ -191,9 +192,7 @@ def run_vulture(
                 # in test files — vulture can't distinguish fixture injection
                 # from dead code, so we accept the false negative here.
                 if name in effective_skip:
-                    basename = os.path.basename(path)
-                    if (basename.startswith("test_") or basename.endswith("_test.py")
-                            or basename in ("conftest.py", "conftest.pyi")):
+                    if is_test_file(path):
                         continue
             # Fixture definitions in test/conftest files (reported as "unused function")
             func_match = _FUNC_RE.search(message)
@@ -202,9 +201,7 @@ def run_vulture(
                 if fname.startswith("__"):
                     continue
                 if fname in effective_skip:
-                    basename = os.path.basename(path)
-                    if (basename.startswith("test_") or basename.endswith("_test.py")
-                            or basename in ("conftest.py", "conftest.pyi")):
+                    if is_test_file(path):
                         continue
             # Skip yield-after-raise in generators (intentional protocol pattern)
             if _UNREACHABLE_RE.search(message):

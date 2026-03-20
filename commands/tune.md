@@ -1,13 +1,13 @@
 ---
-description: "Analyze reverb notes and codebase, then recommend ecko.yaml rules and project improvements"
-allowed-tools: ["Bash", "Read", "Glob", "Grep", "Edit", "Write"]
+description: "Analyze reverb notes and codebase, then recommend ecko.yaml rules"
+allowed-tools: ["Bash", "Read", "Glob", "Grep", "Edit", "Write", "AskUserQuestion"]
 ---
 
-Enter plan mode. You are ecko's tuning advisor. Your job is to analyze this project and recommend guardrails.
+You are ecko's tuning advisor. Your job is to analyze this project, recommend guardrails, and let the user pick which ones to apply.
 
 ## Step 1: Gather Signal
 
-Check for `.ecko-reverb/` files in the project root. If they exist, read all of them — these are reverb notes from past sessions about surprises, gotchas, and recurring issues.
+Check for `.ecko-reverb/` files in the project root. If they exist, read all of them — these are reverb notes from past sessions about surprises, gotchas, and recurring issues. **Remember which files you read** — you will delete them in Step 4.
 
 Also scan the codebase for patterns that suggest useful guardrails:
 - Repeated import patterns that suggest architectural layers (e.g., routes importing ORM models)
@@ -22,7 +22,6 @@ Also scan the codebase for patterns that suggest useful guardrails:
 For each finding, propose a **specific, copy-pasteable** `ecko.yaml` configuration entry. Group into categories:
 
 ### banned_patterns
-Regex patterns that catch anti-patterns before they're committed.
 ```yaml
 banned_patterns:
   - pattern: "..."
@@ -31,7 +30,6 @@ banned_patterns:
 ```
 
 ### obsolete_terms
-Old names that should be replaced with new ones.
 ```yaml
 obsolete_terms:
   - old: "OldName"
@@ -39,7 +37,6 @@ obsolete_terms:
 ```
 
 ### blocked_commands
-Bash commands that should be blocked or flagged.
 ```yaml
 blocked_commands:
   - pattern: "..."
@@ -47,8 +44,7 @@ blocked_commands:
 ```
 
 ### import_rules
-Architecture boundary enforcement — which modules should not import from which.
-Scan the directory structure for layer patterns (routes/, models/, services/, repositories/, api/, components/, hooks/).
+Scan the directory structure for layer patterns (routes/, models/, services/, components/, hooks/).
 ```yaml
 import_rules:
   - files: "routes/*.py"
@@ -59,7 +55,7 @@ import_rules:
 ```
 
 ### builtin_shadow_allowlist
-If ruff A001/A002 hits are noisy (common param names like `type`, `input`, `format`), recommend extending or customizing the allowlist.
+Recommend if ruff A001/A002 hits are noisy for common param names.
 ```yaml
 builtin_shadow_allowlist:
   - type
@@ -70,24 +66,50 @@ builtin_shadow_allowlist:
 ```
 
 ### echo_cap_per_check
-For projects with many legacy issues (e.g., JS codebases with hundreds of `var` declarations), recommend setting a cap to prevent avalanches.
+Recommend for projects with many legacy issues to prevent echo avalanches.
 ```yaml
 echo_cap_per_check: 3  # default: 5, 0 = unlimited
 ```
 
-### CLAUDE.md improvements
-Naming conventions, gotchas, or patterns that should be documented for the agent.
-
-### Code improvements
-Renaming confusing variables, removing duplication, simplifying architecture — only changes that reduce future surprises.
-
-## Step 3: Present and Implement
-
-Present all recommendations to the user as a numbered list. For each:
-- Show the exact config to add
-- Explain why it prevents a recurring issue
-- Mark as [RECOMMEND] or [OPTIONAL] based on confidence
-
-Wait for user approval before implementing any changes. Delete processed `.ecko-reverb/` files at the end.
-
 Do not propose changes that are purely cosmetic or that don't prevent recurring mistakes.
+
+## Step 3: Present as Numbered Interactive List
+
+**Deduplicate** before presenting: if multiple findings would produce the same `ecko.yaml` entry (e.g., 3 reverb notes all about hardcoded colors in `.tsx` files), merge them into a single recommendation.
+
+Present recommendations as a numbered list grouped by category. Format:
+
+```
+## ecko tune — N recommendations
+
+### banned_patterns (count)
+  [1] Short description of what this catches
+      pattern: "the-regex"  glob: "*.ext"
+  [2] ...
+
+### import_rules (count)
+  [3] Short description of the boundary
+      files: "glob"  deny: module1, module2
+
+### echo_cap_per_check (count)
+  [4] Short description
+      value: N
+
+### builtin_shadow_allowlist (count)
+  [5] Short description
+      add: name1, name2
+```
+
+Then ask the user:
+
+```
+Which items to apply? (e.g. 1,3,5 or 1-4 or all or none)
+```
+
+Wait for the user's response. Parse their selection (supports `1,3,5` or `1-4` or `all` or `none`). Only apply the selected items — the user's selection is final, do not ask for confirmation.
+
+## Step 4: Apply and Clean Up
+
+1. **Apply selected items** to `ecko.yaml` (create it if it doesn't exist). Merge with existing config — don't overwrite entries that are already there.
+2. **Delete ALL `.ecko-reverb/*.md` files** that were read in Step 1. This ensures rejected items don't re-appear on the next `/ecko:tune` run. Do this even if the user selected "none".
+3. Tell the user what was applied and that the reverb notes were cleaned up.

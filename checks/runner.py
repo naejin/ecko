@@ -28,6 +28,7 @@ from checks.config import (
     load_config,
     validate_config,
 )
+from checks.regex_utils import safe_regex_compile, safe_regex_search
 from checks.result import Echo, emit, format_file_echoes, format_stop_echoes
 
 # Paths that are almost never worth linting — skip by default.
@@ -40,6 +41,7 @@ _DEFAULT_EXCLUDE_DIRS = [
     "vendor",
     "node_modules",
     ".git",
+    ".ecko-reverb",
     "dist",
     "build",
     "__pycache__",
@@ -63,12 +65,7 @@ def detect_language(file_path: str) -> str:
     return LANG_MAP.get(ext, "unknown")
 
 
-def _is_test_file(file_path: str) -> bool:
-    """Check if a file is a Python test file (by filename convention)."""
-    name = os.path.basename(file_path)
-    return (
-        name.startswith("test_") or name.endswith("_test.py") or name == "conftest.py"
-    )
+from checks.fileutil import is_test_file
 
 
 def _is_skippable_stub(file_path: str) -> bool:
@@ -162,8 +159,14 @@ def filter_suppressed(echoes: list[Echo], file_path: str) -> list[Echo]:
     return filtered
 
 
-def _emit_config_warnings(config: dict) -> None:
-    """Emit config validation warnings to stderr (once per session)."""
+_config_warned: set[str] = set()
+
+
+def _emit_config_warnings(config: dict, cwd: str) -> None:
+    """Emit config validation warnings to stderr (once per cwd per session)."""
+    if cwd in _config_warned:
+        return
+    _config_warned.add(cwd)
     warnings = validate_config(config)
     for w in warnings:
         emit(f"~~ ecko ~~ warning: {w}\n")
@@ -196,23 +199,19 @@ def _run_layer2_checks(
     banned: list[dict[str, str]] | None = None,
     obsolete: list[dict[str, str]] | None = None,
     import_rules: list[dict] | None = None,
-    ruff_available: bool | None = None,
-    biome_available: bool | None = None,
+    ruff_available: bool = False,
+    biome_available: bool = False,
 ) -> tuple[list[Echo], list[str]]:
     """Run Layer 2 checks on a single file.
 
     Returns (echoes, skipped_tools).  Caller controls tool availability
     to avoid redundant resolution in loops.
     """
-    from checks.tools.resolve import resolve_node_tool, resolve_python_tool
-
     echoes: list[Echo] = []
     skipped: list[str] = []
 
     # Tool checks
     if lang == "python":
-        if ruff_available is None:
-            ruff_available = resolve_python_tool("ruff") is not None
         if not ruff_available:
             skipped.append("ruff")
         else:
@@ -222,8 +221,6 @@ def _run_layer2_checks(
                 run_ruff(file_path, builtin_shadow_allowlist=shadow_allowlist)
             )
     elif lang in ("typescript", "javascript"):
-        if biome_available is None:
-            biome_available = resolve_node_tool("biome") is not None
         if not biome_available:
             skipped.append("biome")
         else:
@@ -239,7 +236,7 @@ def _run_layer2_checks(
         echoes.extend(check_duplicate_keys(file_path))
         echoes.extend(check_unreachable_code(file_path))
 
-        if _is_test_file(file_path):
+        if is_test_file(file_path):
             from checks.custom.test_quality import check_test_quality
 
             echoes.extend(check_test_quality(file_path))
@@ -280,7 +277,7 @@ def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
         return 0
 
     config = load_config(cwd)
-    _emit_config_warnings(config)
+    _emit_config_warnings(config, cwd)
 
     if is_excluded(file_path, cwd, get_exclude_patterns(config)):
         return 0
@@ -296,6 +293,13 @@ def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
     autofix(file_path, lang, config)
 
     # --- Layer 2: Echoes ---
+    from checks.tools.resolve import resolve_node_tool, resolve_python_tool
+
+    ruff_available = lang == "python" and resolve_python_tool("ruff") is not None
+    biome_available = (
+        lang in ("typescript", "javascript") and resolve_node_tool("biome") is not None
+    )
+
     echoes, skipped = _run_layer2_checks(
         file_path,
         lang,
@@ -305,6 +309,8 @@ def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
         banned=get_banned_patterns(config),
         obsolete=get_obsolete_terms(config),
         import_rules=get_import_rules(config),
+        ruff_available=ruff_available,
+        biome_available=biome_available,
     )
 
     # Filter
@@ -329,7 +335,7 @@ def _normalize_path(path: str, cwd: str) -> str:
 def run_stop(cwd: str, plugin_root: str) -> int:
     """Run Layer 3 (deep analysis) + Layer 2 re-sweep on all modified files."""
     config = load_config(cwd)
-    _emit_config_warnings(config)
+    _emit_config_warnings(config, cwd)
 
     disabled = get_disabled_checks(config)
     user_excludes = get_exclude_patterns(config)
@@ -413,7 +419,9 @@ def run_stop(cwd: str, plugin_root: str) -> int:
             try:
                 result = future.result()
             except Exception as exc:
-                emit(f"~~ ecko ~~ warning: {tool_name} failed during deep analysis: {exc}\n")
+                emit(
+                    f"~~ ecko ~~ warning: {tool_name} failed during deep analysis: {exc}\n"
+                )
                 continue
             for path, echoes in result.items():
                 norm = _normalize_path(path, cwd)
@@ -429,9 +437,9 @@ def run_stop(cwd: str, plugin_root: str) -> int:
     # Check Layer 2 tool availability once before the loop
     ruff_available = resolve_python_tool("ruff") is not None
     biome_available = resolve_node_tool("biome") is not None
-    if py_files and not ruff_available and "ruff" not in skipped:
+    if py_files and not ruff_available:
         skipped.append("ruff")
-    if ts_files and not biome_available and "biome" not in skipped:
+    if ts_files and not biome_available:
         skipped.append("biome")
 
     for file_path in modified:
@@ -481,24 +489,13 @@ def run_stop(cwd: str, plugin_root: str) -> int:
 
     _emit_skipped_tools(skipped)
 
-    has_echoes = bool(all_echoes)
+    if not all_echoes:
+        return 0
 
-    if has_echoes:
-        emit(format_stop_echoes(all_echoes, echo_cap=echo_cap))
-
-    # Reverb nudge — only when echoes were found (something went wrong)
-    if has_echoes and is_reverb_enabled(config):
-        emit(
-            "\n~~ ecko ~~ Leave a reverb note at "
-            ".ecko-reverb/{date}-{slug}.md — what echoed back? "
-            "Include: 1) Surprises about naming, structure, or conventions "
-            "2) Things that tripped you up "
-            "3) Suggestions for guardrails or checks that would have helped.\n"
-        )
-
-    if has_echoes:
-        return 1
-    return 0
+    emit(format_stop_echoes(all_echoes, echo_cap=echo_cap))
+    if is_reverb_enabled(config):
+        emit("\n~~ ecko ~~ tip: run /ecko:reverb to capture what went wrong\n")
+    return 1
 
 
 def check_bash_command(command: str, user_patterns: list[dict[str, str]]) -> str | None:
@@ -517,60 +514,40 @@ def check_bash_command(command: str, user_patterns: list[dict[str, str]]) -> str
             "message": "Blocked: --no-verify skips hooks — remove it to let ecko checks run",
         },
         {
-            "pattern": _rm_prefix + r"\brm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+/(\s|$|;|&|\|)",
+            "pattern": _rm_prefix
+            + r"\brm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+/(\s|$|;|&|\|)",
             "message": "Blocked: rm -rf / is catastrophic — specify a subdirectory",
         },
         {
-            "pattern": _rm_prefix + r"\brm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+~(\s|$|;|&|\||/)",
+            "pattern": _rm_prefix
+            + r"\brm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+~(\s|$|;|&|\||/)",
             "message": "Blocked: rm -rf ~ would delete the home directory",
         },
         {
-            "pattern": r"git\s+(?:-C\s+\S+\s+)*push\b(?!.*--force-with-lease).*(?:--force|-f)(\s|$|;|&|\|)",
+            "pattern": r"git\b(?!.*--force-with-lease).*\bpush\b.*(?:--force|-f)(\s|$|;|&|\|)",
             "message": "Blocked: use --force-with-lease instead of --force to prevent overwriting remote work",
         },
         {
-            "pattern": r"git\s+(?:-C\s+\S+\s+)*reset\s+--hard(\s|$|;|&|\|)",
+            "pattern": r"git\b.*\breset\s+--hard(\s|$|;|&|\|)",
             "message": "Blocked: git reset --hard discards commits permanently — use git stash or git revert instead",
         },
         {
-            "pattern": r"git\s+(?:-C\s+\S+\s+)*clean\s+-[a-zA-Z]*f[a-zA-Z]*(\s|$|;|&|\|)",
+            "pattern": r"git\b.*\bclean\s+-[a-zA-Z]*f[a-zA-Z]*(\s|$|;|&|\|)",
             "message": "Blocked: git clean -f deletes untracked files permanently — review with git clean -n first",
         },
     ]
 
     for entry in hardcoded + user_patterns:
-        pattern = entry.get("pattern", "")
+        pattern_str = entry.get("pattern", "")
         message = entry.get("message", "Command blocked by ecko")
-        if not pattern:
+        if not pattern_str:
             continue
-        if _safe_regex_search(pattern, command):
+        compiled = safe_regex_compile(pattern_str)
+        if compiled is None:
+            continue
+        if safe_regex_search(compiled, command):
             return message
     return None
-
-
-def _safe_regex_search(pattern: str, text: str, timeout_ms: int = 500) -> bool:
-    """Run re.search with a timeout to guard against ReDoS from user patterns.
-
-    Uses a thread with a timeout. Returns False on timeout or error.
-    """
-    import re
-    import threading
-
-    result: list[bool] = [False]
-
-    def _search() -> None:
-        try:
-            result[0] = bool(re.search(pattern, text))
-        except re.error:
-            result[0] = False
-
-    t = threading.Thread(target=_search, daemon=True)
-    t.start()
-    t.join(timeout=timeout_ms / 1000.0)
-    if t.is_alive():
-        # Timed out — likely ReDoS, treat as no match
-        return False
-    return result[0]
 
 
 def run_pre_tool_use_bash(cwd: str) -> int:

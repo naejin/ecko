@@ -263,6 +263,66 @@ class TestStopMode:
             assert "`os`" not in line, f"Suppressed import leaked: {line}"
 
 
+class TestReverbNudge:
+    @pytest.mark.skipif(not has_uvx, reason="uvx not available")
+    def test_reverb_tip_emitted_when_enabled(self, tmp_path):
+        """Reverb tip should appear in stop-mode output when reverb is enabled and echoes exist."""
+        _init_git_repo(tmp_path)
+        clean = tmp_path / "app.py"
+        clean.write_text("def hello():\n    return 'hello'\n")
+        # Enable reverb in ecko.yaml
+        config = tmp_path / "ecko.yaml"
+        config.write_text("reverb:\n  enabled: true\n")
+        subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "init"],
+            cwd=tmp_path, capture_output=True,
+        )
+        # Introduce an issue so echoes are produced
+        clean.write_text("import os\nimport sys\n\ndef hello():\n    return 'hello'\n")
+
+        code, output = run_ecko_stop(str(tmp_path))
+        assert code == 1
+        assert "tip: run /ecko:reverb" in output
+        # Regression guard: tip must not contain file-write instructions (caused infinite loop)
+        assert "mkdir" not in output
+        assert ".ecko-reverb/" not in output
+
+    @pytest.mark.skipif(not has_uvx, reason="uvx not available")
+    def test_reverb_tip_not_emitted_when_disabled(self, tmp_path):
+        """Reverb tip should NOT appear when reverb is disabled (default)."""
+        _init_git_repo(tmp_path)
+        clean = tmp_path / "app.py"
+        clean.write_text("def hello():\n    return 'hello'\n")
+        subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "init"],
+            cwd=tmp_path, capture_output=True,
+        )
+        clean.write_text("import os\nimport sys\n\ndef hello():\n    return 'hello'\n")
+
+        code, output = run_ecko_stop(str(tmp_path))
+        assert code == 1
+        assert "tip: run /ecko:reverb" not in output
+
+    def test_reverb_tip_not_emitted_when_clean(self, tmp_path):
+        """Reverb tip should NOT appear when there are no echoes, even if enabled."""
+        _init_git_repo(tmp_path)
+        clean = tmp_path / "app.py"
+        clean.write_text("def hello():\n    return 'hello'\n")
+        config = tmp_path / "ecko.yaml"
+        config.write_text("reverb:\n  enabled: true\n")
+        subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "init"],
+            cwd=tmp_path, capture_output=True,
+        )
+
+        code, output = run_ecko_stop(str(tmp_path))
+        assert code == 0
+        assert "tip: run /ecko:reverb" not in output
+
+
 class TestAutofix:
     def test_trailing_whitespace_stripped(self):
         """Layer 1 should strip trailing whitespace."""
