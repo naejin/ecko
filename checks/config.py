@@ -328,9 +328,88 @@ def get_import_rules(config: dict[str, Any]) -> list[dict]:
     return []
 
 
-def is_learnings_enabled(config: dict[str, Any]) -> bool:
-    """Check if the learnings nudge is enabled."""
-    learnings = config.get("learnings", {})
-    if isinstance(learnings, dict):
-        return bool(learnings.get("enabled", False))
+def is_reverb_enabled(config: dict[str, Any]) -> bool:
+    """Check if the reverb nudge is enabled."""
+    reverb = config.get("reverb", {})
+    if isinstance(reverb, dict):
+        return bool(reverb.get("enabled", False))
     return False
+
+
+# --- Config validation ---
+
+_KNOWN_KEYS = frozenset(
+    {
+        "autofix",
+        "deep_analysis",
+        "banned_patterns",
+        "obsolete_terms",
+        "import_rules",
+        "builtin_shadow_allowlist",
+        "echo_cap_per_check",
+        "exclude",
+        "blocked_commands",
+        "reverb",
+        "disabled_checks",
+    }
+)
+
+
+def validate_config(config: dict[str, Any]) -> list[str]:
+    """Validate config and return a list of warning messages.
+
+    Checks for:
+    - Unknown top-level keys (possible typos)
+    - Invalid regex patterns in banned_patterns and blocked_commands
+    """
+    import re
+
+    warnings: list[str] = []
+
+    # Check for unknown keys
+    for key in config:
+        if key not in _KNOWN_KEYS:
+            # Find closest match for "did you mean?" suggestion
+            suggestion = _closest_key(key, _KNOWN_KEYS)
+            if suggestion:
+                warnings.append(
+                    f"unknown config key '{key}' (did you mean '{suggestion}'?)"
+                )
+            else:
+                warnings.append(f"unknown config key '{key}'")
+
+    # Validate regex patterns in banned_patterns
+    for i, rule in enumerate(get_banned_patterns(config)):
+        pattern = rule.get("pattern", "")
+        if pattern:
+            try:
+                re.compile(pattern)
+            except re.error as e:
+                warnings.append(f"invalid regex in banned_patterns[{i}]: {e}")
+
+    # Validate regex patterns in blocked_commands
+    for i, rule in enumerate(get_blocked_commands(config)):
+        pattern = rule.get("pattern", "")
+        if pattern:
+            try:
+                re.compile(pattern)
+            except re.error as e:
+                warnings.append(f"invalid regex in blocked_commands[{i}]: {e}")
+
+    return warnings
+
+
+def _closest_key(key: str, known: frozenset[str]) -> str | None:
+    """Find the closest known key by simple edit-distance heuristic."""
+    # Check prefix/suffix match first (catches typos like disabled_check)
+    for k in known:
+        if k.startswith(key) or key.startswith(k):
+            return k
+    # Check single-char difference
+    for k in known:
+        if abs(len(k) - len(key)) <= 2:
+            diff = sum(1 for a, b in zip(k, key) if a != b)
+            diff += abs(len(k) - len(key))
+            if diff <= 2:
+                return k
+    return None

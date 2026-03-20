@@ -83,6 +83,47 @@ class TestBashGuardHardcoded:
         result = check_bash_command("git -C /some/path commit --no-verify", [])
         assert result is not None
 
+    def test_blocks_force_push(self):
+        result = check_bash_command("git push --force origin main", [])
+        assert result is not None
+        assert "force-with-lease" in result.lower()
+
+    def test_allows_force_with_lease(self):
+        result = check_bash_command("git push --force-with-lease origin main", [])
+        assert result is None
+
+    def test_blocks_git_reset_hard(self):
+        result = check_bash_command("git reset --hard", [])
+        assert result is not None
+
+    def test_blocks_git_reset_hard_with_ref(self):
+        result = check_bash_command("git reset --hard HEAD~3", [])
+        assert result is not None
+
+    def test_allows_git_reset_soft(self):
+        result = check_bash_command("git reset --soft HEAD~1", [])
+        assert result is None
+
+    def test_blocks_git_clean_f(self):
+        result = check_bash_command("git clean -f", [])
+        assert result is not None
+
+    def test_blocks_git_clean_fd(self):
+        result = check_bash_command("git clean -fd", [])
+        assert result is not None
+
+    def test_allows_git_clean_dry_run(self):
+        result = check_bash_command("git clean -n", [])
+        assert result is None
+
+    def test_blocks_force_push_chained(self):
+        result = check_bash_command("git push --force origin main && echo done", [])
+        assert result is not None
+
+    def test_blocks_git_clean_piped(self):
+        result = check_bash_command("git clean -fd | tee log.txt", [])
+        assert result is not None
+
 
 class TestBashGuardUserPatterns:
     """Tests for user-configurable blocked patterns."""

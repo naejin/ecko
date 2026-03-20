@@ -24,8 +24,9 @@ from checks.config import (
     get_import_rules,
     get_obsolete_terms,
     is_deep_enabled,
-    is_learnings_enabled,
+    is_reverb_enabled,
     load_config,
+    validate_config,
 )
 from checks.result import Echo, emit, format_file_echoes, format_stop_echoes
 
@@ -156,6 +157,20 @@ def filter_suppressed(echoes: list[Echo], file_path: str) -> list[Echo]:
     return filtered
 
 
+def _emit_config_warnings(config: dict) -> None:
+    """Emit config validation warnings to stderr (once per session)."""
+    warnings = validate_config(config)
+    for w in warnings:
+        emit(f"~~ ecko ~~ warning: {w}\n")
+
+
+def _emit_skipped_tools(skipped: list[str]) -> None:
+    """Emit a summary line for tools that were unavailable."""
+    if skipped:
+        names = ", ".join(f"{t} (not found)" for t in skipped)
+        emit(f"~~ ecko ~~ note: {names} — install for deeper checks\n")
+
+
 def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
     """Run Layer 1 (auto-fix) then Layer 2 (echoes) on a single file."""
     if not os.path.isfile(file_path):
@@ -166,6 +181,8 @@ def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
         return 0
 
     config = load_config(cwd)
+    _emit_config_warnings(config)
+
     if is_excluded(file_path, cwd, get_exclude_patterns(config)):
         return 0
 
@@ -181,16 +198,27 @@ def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
 
     # --- Layer 2: Echoes ---
     echoes: list[Echo] = []
+    skipped: list[str] = []
 
     # Tool checks
     if lang == "python":
+        from checks.tools.resolve import resolve_python_tool
         from checks.tools.ruff_adapter import run_ruff
 
-        echoes.extend(run_ruff(file_path, builtin_shadow_allowlist=shadow_allowlist))
+        if resolve_python_tool("ruff") is None:
+            skipped.append("ruff")
+        else:
+            echoes.extend(
+                run_ruff(file_path, builtin_shadow_allowlist=shadow_allowlist)
+            )
     elif lang in ("typescript", "javascript"):
         from checks.tools.biome_adapter import run_biome
+        from checks.tools.resolve import resolve_node_tool
 
-        echoes.extend(run_biome(file_path, plugin_root))
+        if resolve_node_tool("biome") is None:
+            skipped.append("biome")
+        else:
+            echoes.extend(run_biome(file_path, plugin_root))
 
     # Custom checks (Python AST)
     if lang == "python":
@@ -235,6 +263,8 @@ def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
     echoes = filter_suppressed(echoes, file_path)
     echoes = [e for e in echoes if e.check not in disabled]
 
+    _emit_skipped_tools(skipped)
+
     if echoes:
         emit(format_file_echoes(file_path, echoes, echo_cap=echo_cap))
         return 1
@@ -251,6 +281,8 @@ def _normalize_path(path: str, cwd: str) -> str:
 def run_stop(cwd: str, plugin_root: str) -> int:
     """Run Layer 3 (deep analysis) + Layer 2 re-sweep on all modified files."""
     config = load_config(cwd)
+    _emit_config_warnings(config)
+
     disabled = get_disabled_checks(config)
     user_excludes = get_exclude_patterns(config)
     shadow_allowlist = get_builtin_shadow_allowlist(config)
@@ -270,39 +302,88 @@ def run_stop(cwd: str, plugin_root: str) -> int:
     ]
 
     all_echoes: dict[str, list[Echo]] = {}
+    skipped: list[str] = []
 
-    # --- Layer 3: Deep analysis ---
-    # TypeScript type checking
-    if ts_files and is_deep_enabled(config, "tsc"):
-        tsconfig = os.path.join(cwd, "tsconfig.json")
-        if os.path.isfile(tsconfig):
-            from checks.tools.tsc_adapter import run_tsc
+    # --- Layer 3: Deep analysis (parallelized) ---
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-            for path, echoes in run_tsc(cwd).items():
-                all_echoes.setdefault(_normalize_path(path, cwd), []).extend(echoes)
+    from checks.tools.resolve import resolve_node_tool, resolve_python_tool
 
-    # Python type checking
-    if py_files and is_deep_enabled(config, "pyright"):
+    # Build set of normalized modified paths for post-filtering
+    modified_set = {_normalize_path(f, cwd) for f in modified}
+
+    def _run_tsc() -> dict[str, list[Echo]]:
+        from checks.tools.tsc_adapter import run_tsc
+
+        return run_tsc(cwd)
+
+    def _run_pyright() -> dict[str, list[Echo]]:
         from checks.tools.pyright_adapter import run_pyright
 
-        for path, echoes in run_pyright(py_files, cwd).items():
-            all_echoes.setdefault(_normalize_path(path, cwd), []).extend(echoes)
+        return run_pyright(py_files, cwd)
 
-    # Python dead code
-    if py_files and is_deep_enabled(config, "vulture"):
+    def _run_vulture() -> dict[str, list[Echo]]:
         from checks.tools.vulture_adapter import run_vulture
 
-        for path, echoes in run_vulture(cwd).items():
-            all_echoes.setdefault(_normalize_path(path, cwd), []).extend(echoes)
+        return run_vulture(cwd, modified_files=py_files)
 
-    # TypeScript unused exports
-    if ts_files and is_deep_enabled(config, "knip"):
+    def _run_knip() -> dict[str, list[Echo]]:
         from checks.tools.knip_adapter import run_knip
 
-        for path, echoes in run_knip(cwd).items():
-            all_echoes.setdefault(_normalize_path(path, cwd), []).extend(echoes)
+        return run_knip(cwd)
+
+    futures = {}
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        if ts_files and is_deep_enabled(config, "tsc"):
+            tsconfig = os.path.join(cwd, "tsconfig.json")
+            if os.path.isfile(tsconfig):
+                if resolve_node_tool("tsc", package="typescript") is None:
+                    skipped.append("tsc")
+                else:
+                    futures[pool.submit(_run_tsc)] = "tsc"
+
+        if py_files and is_deep_enabled(config, "pyright"):
+            if resolve_node_tool("pyright") is None:
+                skipped.append("pyright")
+            else:
+                futures[pool.submit(_run_pyright)] = "pyright"
+
+        if py_files and is_deep_enabled(config, "vulture"):
+            if resolve_python_tool("vulture") is None:
+                skipped.append("vulture")
+            else:
+                futures[pool.submit(_run_vulture)] = "vulture"
+
+        if ts_files and is_deep_enabled(config, "knip"):
+            if resolve_node_tool("knip") is None:
+                skipped.append("knip")
+            else:
+                futures[pool.submit(_run_knip)] = "knip"
+
+        for future in as_completed(futures):
+            try:
+                result = future.result()
+            except Exception:
+                continue
+            for path, echoes in result.items():
+                norm = _normalize_path(path, cwd)
+                # Post-filter tsc/knip results to modified files only
+                if norm not in modified_set:
+                    continue
+                all_echoes.setdefault(norm, []).extend(echoes)
 
     # --- Layer 2: Re-sweep all modified files ---
+    banned = get_banned_patterns(config)
+    obsolete = get_obsolete_terms(config)
+
+    # Check Layer 2 tool availability once before the loop
+    ruff_available = resolve_python_tool("ruff") is not None
+    biome_available = resolve_node_tool("biome") is not None
+    if py_files and not ruff_available and "ruff" not in skipped:
+        skipped.append("ruff")
+    if ts_files and not biome_available and "biome" not in skipped:
+        skipped.append("biome")
+
     for file_path in modified:
         if not os.path.isfile(file_path):
             continue
@@ -310,11 +391,12 @@ def run_stop(cwd: str, plugin_root: str) -> int:
         echoes: list[Echo] = []
 
         if lang == "python":
-            from checks.tools.ruff_adapter import run_ruff
+            if ruff_available:
+                from checks.tools.ruff_adapter import run_ruff
 
-            echoes.extend(
-                run_ruff(file_path, builtin_shadow_allowlist=shadow_allowlist)
-            )
+                echoes.extend(
+                    run_ruff(file_path, builtin_shadow_allowlist=shadow_allowlist)
+                )
             from checks.custom.duplicate_keys import check_duplicate_keys
             from checks.custom.unreachable_code import check_unreachable_code
 
@@ -326,21 +408,20 @@ def run_stop(cwd: str, plugin_root: str) -> int:
 
                 echoes.extend(check_test_quality(file_path))
         elif lang in ("typescript", "javascript"):
-            from checks.tools.biome_adapter import run_biome
+            if biome_available:
+                from checks.tools.biome_adapter import run_biome
 
-            echoes.extend(run_biome(file_path, plugin_root))
+                echoes.extend(run_biome(file_path, plugin_root))
 
         from checks.custom.unicode_artifacts import check_unicode_artifacts
 
         echoes.extend(check_unicode_artifacts(file_path))
 
-        banned = get_banned_patterns(config)
         if banned:
             from checks.custom.banned_patterns import check_banned_patterns
 
             echoes.extend(check_banned_patterns(file_path, banned, cwd))
 
-        obsolete = get_obsolete_terms(config)
         if obsolete:
             from checks.custom.banned_patterns import check_obsolete_terms
 
@@ -377,18 +458,19 @@ def run_stop(cwd: str, plugin_root: str) -> int:
         if not all_echoes[path]:
             del all_echoes[path]
 
+    _emit_skipped_tools(skipped)
+
     has_echoes = bool(all_echoes)
 
     if has_echoes:
         emit(format_stop_echoes(all_echoes, echo_cap=echo_cap))
 
-    # Learnings nudge — only when echoes were found (something went wrong)
-    if has_echoes and is_learnings_enabled(config):
+    # Reverb nudge — only when echoes were found (something went wrong)
+    if has_echoes and is_reverb_enabled(config):
         emit(
-            "\n~~ ecko ~~ If you encountered anything surprising about this "
-            "codebase, write a brief learnings file at "
-            ".ecko-learnings/{date}-{slug}.md. Include: "
-            "1) Surprises about naming, structure, or conventions "
+            "\n~~ ecko ~~ Leave a reverb note at "
+            ".ecko-reverb/{date}-{slug}.md — what echoed back? "
+            "Include: 1) Surprises about naming, structure, or conventions "
             "2) Things that tripped you up "
             "3) Suggestions for guardrails or checks that would have helped.\n"
         )
@@ -419,6 +501,18 @@ def check_bash_command(command: str, user_patterns: list[dict[str, str]]) -> str
             "pattern": r"\brm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+~(\s|$|;|&|\||/)",
             "message": "Blocked: rm -rf ~ would delete the home directory",
         },
+        {
+            "pattern": r"git\s+push\b.*--force(?!-with-lease)(\s|$|;|&|\|)",
+            "message": "Blocked: use --force-with-lease instead of --force to prevent overwriting remote work",
+        },
+        {
+            "pattern": r"git\s+reset\s+--hard(\s|$|;|&|\|)",
+            "message": "Blocked: git reset --hard discards commits permanently — use git stash or git revert instead",
+        },
+        {
+            "pattern": r"git\s+clean\s+-[a-zA-Z]*f[a-zA-Z]*(\s|$|;|&|\|)",
+            "message": "Blocked: git clean -f deletes untracked files permanently — review with git clean -n first",
+        },
     ]
 
     for entry in hardcoded + user_patterns:
@@ -427,11 +521,36 @@ def check_bash_command(command: str, user_patterns: list[dict[str, str]]) -> str
         if not pattern:
             continue
         try:
-            if re.search(pattern, command):
+            if _safe_regex_search(pattern, command):
                 return message
         except re.error:
             continue
     return None
+
+
+def _safe_regex_search(pattern: str, text: str, timeout_ms: int = 500) -> bool:
+    """Run re.search with a timeout to guard against ReDoS from user patterns.
+
+    Uses a thread with a timeout. Returns False on timeout or error.
+    """
+    import re
+    import threading
+
+    result: list[bool] = [False]
+
+    def _search() -> None:
+        try:
+            result[0] = bool(re.search(pattern, text))
+        except re.error:
+            result[0] = False
+
+    t = threading.Thread(target=_search, daemon=True)
+    t.start()
+    t.join(timeout=timeout_ms / 1000.0)
+    if t.is_alive():
+        # Timed out — likely ReDoS, treat as no match
+        return False
+    return result[0]
 
 
 def run_pre_tool_use_bash(cwd: str) -> int:

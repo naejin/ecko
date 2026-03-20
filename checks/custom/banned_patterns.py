@@ -5,8 +5,25 @@ from __future__ import annotations
 import fnmatch
 import os
 import re
+import threading
 
 from checks.result import Echo
+
+
+def _safe_regex_search(pattern: re.Pattern[str], text: str) -> bool:
+    """Run regex search with a timeout to guard against ReDoS."""
+    result: list[bool] = [False]
+
+    def _search() -> None:
+        try:
+            result[0] = bool(pattern.search(text))
+        except re.error:
+            result[0] = False
+
+    t = threading.Thread(target=_search, daemon=True)
+    t.start()
+    t.join(timeout=0.5)
+    return False if t.is_alive() else result[0]
 
 
 def check_banned_patterns(
@@ -14,7 +31,7 @@ def check_banned_patterns(
 ) -> list[Echo]:
     """Check file against banned regex patterns from config."""
     try:
-        with open(file_path) as f:
+        with open(file_path, encoding="utf-8") as f:
             lines = f.readlines()
     except (OSError, UnicodeDecodeError):
         return []
@@ -49,7 +66,7 @@ def check_banned_patterns(
             continue
 
         for line_num, line in enumerate(lines, 1):
-            if regex.search(line):
+            if _safe_regex_search(regex, line):
                 echoes.append(
                     Echo(
                         check="banned-pattern",
@@ -64,7 +81,7 @@ def check_banned_patterns(
 def check_obsolete_terms(file_path: str, terms: list[dict[str, str]]) -> list[Echo]:
     """Check file for obsolete terms that should be renamed."""
     try:
-        with open(file_path) as f:
+        with open(file_path, encoding="utf-8") as f:
             lines = f.readlines()
     except (OSError, UnicodeDecodeError):
         return []

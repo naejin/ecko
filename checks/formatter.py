@@ -50,7 +50,7 @@ def _run_tool(cmd: list[str] | None, *args: str) -> None:
 def _strip_trailing_whitespace(file_path: str) -> None:
     """Remove trailing whitespace from each line in the file."""
     try:
-        with open(file_path, "r") as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             original = f.read()
         lines = original.splitlines(True)
         cleaned = []
@@ -61,7 +61,7 @@ def _strip_trailing_whitespace(file_path: str) -> None:
                 cleaned.append(line.rstrip())
         result = "".join(cleaned)
         if result != original:
-            with open(file_path, "w") as f:
+            with open(file_path, "w", encoding="utf-8") as f:
                 f.write(result)
     except (OSError, UnicodeDecodeError):
         pass

@@ -1,5 +1,5 @@
 {
   "name": "ecko",
   "description": "Deterministic code quality checks for AI agents -- echoes back mistakes at write-time so the agent self-corrects before the developer ever sees the code.",
-  "version": "0.5.0"
+  "version": "0.5.1"
 }

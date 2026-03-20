@@ -83,8 +83,16 @@ def _is_yield_after_raise(path: str, lineno: int) -> bool:
     return False
 
 
+_fixture_cache: dict[str, set[str]] = {}
+
+
 def _collect_fixture_names(cwd: str) -> set[str]:
-    """Scan conftest.py files for @pytest.fixture decorated function names."""
+    """Scan conftest.py files for @pytest.fixture decorated function names.
+
+    Results are cached per cwd to avoid redundant AST parsing.
+    """
+    if cwd in _fixture_cache:
+        return _fixture_cache[cwd]
     names: set[str] = set()
     for path in glob.glob(os.path.join(cwd, "**", "conftest.py"), recursive=True):
         try:
@@ -97,18 +105,36 @@ def _collect_fixture_names(cwd: str) -> set[str]:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 if _has_fixture_decorator(node):
                     names.add(node.name)
+    _fixture_cache[cwd] = names
     return names
 
 
-def run_vulture(cwd: str) -> dict[str, list[Echo]]:
-    """Run vulture with 80% confidence threshold. Returns echoes grouped by file."""
+def run_vulture(
+    cwd: str, modified_files: list[str] | None = None
+) -> dict[str, list[Echo]]:
+    """Run vulture with 80% confidence threshold. Returns echoes grouped by file.
+
+    If modified_files is provided, scopes the scan to those files only.
+    Otherwise falls back to scanning the entire directory.
+    """
     cmd = resolve_python_tool("vulture")
     if not cmd:
         return {}
 
+    # Scope to modified files when provided (much faster on large repos)
+    if modified_files:
+        targets = [
+            os.path.relpath(f, cwd) for f in modified_files
+            if f.endswith(".py") and os.path.isfile(f)
+        ]
+        if not targets:
+            return {}
+    else:
+        targets = ["."]
+
     try:
         result = subprocess.run(
-            [*cmd, ".", "--min-confidence", "80"],
+            [*cmd, *targets, "--min-confidence", "80"],
             capture_output=True,
             text=True,
             cwd=cwd,

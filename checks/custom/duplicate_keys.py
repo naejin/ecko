@@ -10,7 +10,7 @@ from checks.result import Echo
 def check_duplicate_keys(file_path: str) -> list[Echo]:
     """Walk Python AST for Dict nodes with duplicate Constant keys."""
     try:
-        with open(file_path) as f:
+        with open(file_path, encoding="utf-8") as f:
             source = f.read()
         tree = ast.parse(source, filename=file_path)
     except (OSError, SyntaxError, UnicodeDecodeError):

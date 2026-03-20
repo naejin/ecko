@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.5.1
+
+Trust, safety, and performance — based on independent consensus from 10 code review agents.
+
+### Trust
+
+- **Skipped-tool reporting** — when a tool is unavailable (not installed, no uvx/npx), ecko now emits `~~ ecko ~~ note: ruff (not found) — install for deeper checks` instead of silent nothing. Transforms the "is it working?" experience.
+- **Config validation** — unknown keys in `ecko.yaml` produce warnings with "did you mean?" suggestions. Invalid regex patterns in `banned_patterns` and `blocked_commands` are reported at config load time.
+
+### Safety
+
+- **Expanded bash guard** — now blocks `git push --force` (suggests `--force-with-lease`), `git reset --hard` (suggests stash/revert), and `git clean -f` (suggests `-n` preview) in addition to existing `--no-verify` and `rm -rf /~` blocks.
+- **ReDoS protection** — user-supplied regex patterns in `banned_patterns` and `blocked_commands` now run with a 500ms thread-based timeout, preventing catastrophic backtracking from hanging ecko.
+
+### Performance
+
+- **Parallel Layer 3** — tsc, pyright, vulture, and knip now run concurrently via `ThreadPoolExecutor`. 2-3x speedup when multiple tools are enabled.
+- **Vulture scoped to modified files** — vulture now receives the modified file list instead of scanning `.`, dramatically faster on large repos.
+- **tsc/knip post-filtered** — Layer 3 results from tsc and knip are filtered to modified files only, reducing noise from pre-existing issues.
+- **Fixture collection cache** — `_collect_fixture_names()` results are cached per cwd, avoiding redundant conftest.py AST parsing.
+
+### Rename
+
+- **Learnings renamed to Reverb** — `learnings` config key is now `reverb`, `.ecko-learnings/` directory is now `.ecko-reverb/`. The name fits ecko's acoustic metaphor — reverb is what lingers after echoes fade. **Breaking:** users with `learnings.enabled: true` must change to `reverb.enabled: true`.
+
+### Bug fixes
+
+- **`encoding="utf-8"` in 3 files** — `formatter.py`, `banned_patterns.py`, `duplicate_keys.py` now use `encoding="utf-8"` for all `open()` calls. Fixes silent corruption on Windows where Python defaults to cp1252.
+- **Config loop hoist** — `banned` and `obsolete` config values moved before the per-file loop in `run_stop()`, matching the constraint documented in CLAUDE.md.
+
 ## v0.5.0
 
 Noise reduction and architecture enforcement — fewer false positives, smarter filtering, and import layer rules.
@@ -55,13 +85,13 @@ New PreToolUse hook blocks dangerous bash commands before execution (exit code 2
 
 ExitPlanMode hook reminds the agent to include test steps for all code changes in the plan.
 
-### Learnings nudge
+### Reverb nudge
 
-When the stop hook finds echoes (something went wrong), it nudges the agent to write a brief learnings file at `.ecko-learnings/`. Opt-in via `learnings.enabled: true` in `ecko.yaml`.
+When the stop hook finds echoes (something went wrong), it nudges the agent to leave a reverb note at `.ecko-reverb/`. Opt-in via `reverb.enabled: true` in `ecko.yaml`.
 
 ### `/ecko:tune` command
 
-Analyzes `.ecko-learnings/` files and codebase patterns, then recommends specific `ecko.yaml` rules: banned patterns, obsolete terms, blocked commands, and CLAUDE.md improvements.
+Analyzes `.ecko-reverb/` notes and codebase patterns, then recommends specific `ecko.yaml` rules: banned patterns, obsolete terms, blocked commands, and CLAUDE.md improvements.
 
 ### Other improvements
 

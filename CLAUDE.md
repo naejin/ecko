@@ -42,6 +42,18 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `unreachable-code`: yield-after-raise skipped in generators and `@contextmanager` functions (both custom check and vulture adapter)
 - `dead-code` (vulture): dunder-prefix filter (`__n`, `__get__`, etc.), expanded `_ALWAYS_SKIP` (`objtype`, `owner`, `sender`), dynamic pytest fixture collection from conftest.py files
 
+## Trust + safety (v0.5.1)
+- Skipped-tool reporting: when a tool is unavailable, ecko emits `~~ ecko ~~ note: <tool> (not found)` instead of silent nothing
+- Config validation: `validate_config()` warns on unknown keys (with "did you mean?" suggestions) and invalid regex patterns
+- Bash guard expanded: blocks `git push --force`, `git reset --hard`, `git clean -f` in addition to existing patterns
+- ReDoS protection: user-supplied regex in `banned_patterns` and `blocked_commands` runs with thread-based timeout (500ms)
+- Layer 3 runs tools in parallel via `ThreadPoolExecutor` (2-3x speedup)
+- Vulture scoped to modified files only (`run_vulture(cwd, modified_files=...)`)
+- tsc/knip results post-filtered to modified files in runner.py
+- Vulture fixture collection cached per cwd (`_fixture_cache`)
+- Config values `banned` and `obsolete` hoisted before per-file loop in `run_stop()`
+- `encoding="utf-8"` added to all `open()` calls in formatter.py, banned_patterns.py, duplicate_keys.py
+
 ## Known remaining FP patterns (tracked for future work)
 - `builtin-shadowing`: `object`, `print`, `all` intentionally NOT in default allowlist — users can add via config
 - `singleton-comparison` in test files: `== True`/`== False` in test assertions is intentional equality testing
@@ -97,8 +109,8 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Verify with: `curl -fsSL https://raw.githubusercontent.com/naejin/ecko/main/scripts/install.sh | bash`
 
 ## Current version and next milestone
-- Current: v0.5.0 (noise reduction + architecture enforcement)
-- Previous: v0.4.0 (codeleash-inspired guardrails)
+- Current: v0.5.1 (trust + safety + performance)
+- Previous: v0.5.0 (noise reduction + architecture enforcement)
 
 ## Not part of the plugin
 - `docs/ideas/` — internal ideation (gitignored)

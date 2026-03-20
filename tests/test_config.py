@@ -11,6 +11,7 @@ from checks.config import (
     is_autofix_enabled,
     is_deep_enabled,
     load_config,
+    validate_config,
 )
 
 
@@ -121,3 +122,56 @@ class TestConfigHelpers:
 
     def test_exclude_patterns_empty(self):
         assert get_exclude_patterns({}) == []
+
+
+class TestValidateConfig:
+    def test_valid_config_no_warnings(self):
+        config = {
+            "disabled_checks": ["unused-imports"],
+            "autofix": {"black": True},
+            "exclude": ["*.min.js"],
+        }
+        assert validate_config(config) == []
+
+    def test_unknown_key_warning(self):
+        config = {"disabled_check": ["unused-imports"]}
+        warnings = validate_config(config)
+        assert len(warnings) == 1
+        assert "disabled_check" in warnings[0]
+        assert "disabled_checks" in warnings[0]
+
+    def test_unknown_key_no_suggestion(self):
+        config = {"zzz_completely_unknown": True}
+        warnings = validate_config(config)
+        assert len(warnings) == 1
+        assert "zzz_completely_unknown" in warnings[0]
+
+    def test_invalid_banned_pattern_regex(self):
+        config = {"banned_patterns": [{"pattern": "[invalid"}]}
+        warnings = validate_config(config)
+        assert len(warnings) == 1
+        assert "banned_patterns[0]" in warnings[0]
+
+    def test_invalid_blocked_command_regex(self):
+        config = {"blocked_commands": [{"pattern": "(unclosed"}]}
+        warnings = validate_config(config)
+        assert len(warnings) == 1
+        assert "blocked_commands[0]" in warnings[0]
+
+    def test_valid_patterns_no_warnings(self):
+        config = {
+            "banned_patterns": [{"pattern": r"foo\d+"}],
+            "blocked_commands": [{"pattern": r"rm\s+-rf"}],
+        }
+        assert validate_config(config) == []
+
+    def test_multiple_issues(self):
+        config = {
+            "disabled_check": [],
+            "banned_patterns": [{"pattern": "[bad"}],
+        }
+        warnings = validate_config(config)
+        assert len(warnings) == 2
+
+    def test_empty_config(self):
+        assert validate_config({}) == []

@@ -1,5 +1,5 @@
 ---
-description: "Analyze learnings and codebase, then recommend ecko.yaml rules and project improvements"
+description: "Analyze reverb notes and codebase, then recommend ecko.yaml rules and project improvements"
 allowed-tools: ["Bash", "Read", "Glob", "Grep", "Edit", "Write"]
 ---
 
@@ -7,7 +7,7 @@ Enter plan mode. You are ecko's tuning advisor. Your job is to analyze this proj
 
 ## Step 1: Gather Signal
 
-Check for `.ecko-learnings/` files in the project root. If they exist, read all of them — these are notes from past sessions about surprises, gotchas, and recurring issues.
+Check for `.ecko-reverb/` files in the project root. If they exist, read all of them — these are reverb notes from past sessions about surprises, gotchas, and recurring issues.
 
 Also scan the codebase for patterns that suggest useful guardrails:
 - Repeated import patterns that suggest architectural layers (e.g., routes importing ORM models)
@@ -88,6 +88,6 @@ Present all recommendations to the user as a numbered list. For each:
 - Explain why it prevents a recurring issue
 - Mark as [RECOMMEND] or [OPTIONAL] based on confidence
 
-Wait for user approval before implementing any changes. Delete processed `.ecko-learnings/` files at the end.
+Wait for user approval before implementing any changes. Delete processed `.ecko-reverb/` files at the end.
 
 Do not propose changes that are purely cosmetic or that don't prevent recurring mistakes.

@@ -1,6 +1,6 @@
 # ecko
 
-[![v0.5.0](https://img.shields.io/badge/version-0.5.0-blue)](https://github.com/naejin/ecko/releases/tag/v0.5.0)
+[![v0.5.1](https://img.shields.io/badge/version-0.5.1-blue)](https://github.com/naejin/ecko/releases/tag/v0.5.1)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-plugin-7c3aed)](https://docs.anthropic.com/en/docs/claude-code)
 [![Python](https://img.shields.io/badge/python-3.10+-3776ab?logo=python&logoColor=white)](https://python.org)
 [![TypeScript](https://img.shields.io/badge/typescript-supported-3178c6?logo=typescript&logoColor=white)](https://typescriptlang.org)
@@ -64,8 +64,9 @@ Ecko hooks into four moments in a Claude Code session:
 ```
 ┌─────────────────────────────────────────────┐
 │  Bash guard (PreToolUse)                    │
-│  Blocks --no-verify, rm -rf /, rm -rf ~     │
-│  + user-configurable blocked_commands.      │
+│  Blocks: --no-verify, rm -rf /, rm -rf ~,  │
+│  git push --force, git reset --hard,        │
+│  git clean -f + user blocked_commands.      │
 │  Agent never executes the command.          │
 └─────────────────────────────────────────────┘
 ```
@@ -106,6 +107,16 @@ Ecko hooks into four moments in a Claude Code session:
 │  Blocks agent until issues are fixed.       │
 └─────────────────────────────────────────────┘
 ```
+
+### When Does Each Layer Run?
+
+| Layer | Trigger | Scope | Speed |
+|-------|---------|-------|-------|
+| Bash guard | Before every Bash command | Single command | Instant |
+| Layer 1 (auto-fix) | After every Write/Edit | Single file | <1s |
+| Layer 2 (echoes) | After every Write/Edit | Single file | <2s |
+| Plan check | When agent exits plan mode | Plan content | Instant |
+| Layer 3 (deep analysis) | When agent tries to stop | All modified files | 3-15s |
 
 ## Checks
 
@@ -154,6 +165,17 @@ Ecko hooks into four moments in a Claude Code session:
 | `dead-code` | vulture | Unused functions, classes, variables (80% confidence) |
 | `unused-export` | knip | Unused exports, imports, dependencies |
 
+## Reverb → Tune
+
+Enable reverb to capture session insights when echoes are found:
+
+```yaml
+reverb:
+  enabled: true
+```
+
+When the stop hook fires with echoes, the agent is nudged to leave a note at `.ecko-reverb/`. Then `/ecko:tune` reads those notes alongside codebase patterns and recommends `ecko.yaml` rules — closing the feedback loop.
+
 ## Commands
 
 | Command | Description |
@@ -161,7 +183,7 @@ Ecko hooks into four moments in a Claude Code session:
 | `/ecko:ping [file]` | Run checks on a file manually |
 | `/ecko:status` | Show installed tools and config |
 | `/ecko:setup` | Install missing tools interactively |
-| `/ecko:tune` | Analyze codebase and recommend ecko.yaml rules |
+| `/ecko:tune` | Analyze reverb notes and codebase, recommend ecko.yaml rules |
 
 ## Configuration
 
@@ -196,15 +218,17 @@ import_rules:
     message: "Routes must not import from the data layer"
 
 # Block dangerous bash commands (in addition to built-in blocks)
+# Built-in: --no-verify, rm -rf /, rm -rf ~, git push --force,
+#           git reset --hard, git clean -f
 blocked_commands:
-  - pattern: "git push.*--force(?!-with-lease)"
-    message: "Use --force-with-lease instead of --force"
+  - pattern: "(pytest|npm test).*\\|"
+    message: "Do not pipe test output — run tests directly"
 
 # Cap repeated echoes per check per file (default: 5, 0 = unlimited)
 echo_cap_per_check: 5
 
-# Nudge agent to write learnings when echoes are found on stop
-learnings:
+# Nudge agent to leave reverb notes when echoes are found on stop
+reverb:
   enabled: true
 
 # Disable specific checks entirely
@@ -244,6 +268,24 @@ if x == None:  # ecko:ignore[singleton-comparison]
 | [knip](https://github.com/webpro-nl/knip) | deep | `npx` / PATH |
 
 All tools are resolved automatically — no manual installation required. Ecko checks PATH first (uses your local install if present), then falls back to `uvx`/`npx` which download and cache tools on demand.
+
+When tools are unavailable, ecko reports what was skipped:
+```
+~~ ecko ~~ note: ruff (not found), vulture (not found) — install for deeper checks
+```
+
+## Troubleshooting
+
+**Ecko runs but reports nothing** — Check if your tools are installed: run `/ecko:status`. If no tools are found and you don't have `uvx`/`npx`, install [uv](https://docs.astral.sh/uv) or [Node.js](https://nodejs.org). Ecko will report skipped tools when they're unavailable.
+
+**Config changes aren't taking effect** — Verify your `ecko.yaml` is in the project root (same directory as `.git`). Ecko validates config and warns about unknown keys:
+```
+~~ ecko ~~ warning: unknown config key 'disabled_check' (did you mean 'disabled_checks'?)
+```
+
+**A check is too noisy** — Disable it in `ecko.yaml`: `disabled_checks: [check-name]`. Or suppress per-line with `# ecko:ignore[check-name]`. You can also reduce repeated echoes with `echo_cap_per_check`.
+
+**Layer 3 is slow** — Deep analysis tools (tsc, pyright, vulture, knip) run in parallel on stop. To disable a slow tool: `deep_analysis: { vulture: false }`.
 
 ## License
 

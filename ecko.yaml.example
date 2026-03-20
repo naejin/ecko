@@ -69,7 +69,10 @@ exclude: []
   # - "*.min.js"
 
 # Blocked bash commands — PreToolUse hook blocks these patterns
-# Hardcoded (always active): git commit --no-verify, rm -rf /, rm -rf ~
+# Hardcoded (always active):
+#   git commit --no-verify, rm -rf /, rm -rf ~,
+#   git push --force (use --force-with-lease), git reset --hard,
+#   git clean -f (use -n to preview first)
 # Add your own patterns below:
 blocked_commands: []
   # - pattern: "(pytest|npm test|cargo test).*\\|"
@@ -77,8 +80,9 @@ blocked_commands: []
   # - pattern: "git push.*--force(?!-with-lease)"
   #   message: "Use --force-with-lease instead of --force"
 
-# Learnings system — nudge to write learnings when echoes are found on stop
-learnings:
+# Reverb — nudge agent to leave reverb notes when echoes are found on stop
+# Notes are written to .ecko-reverb/{date}-{slug}.md and consumed by /ecko:tune
+reverb:
   enabled: false             # default: false
 
 # Disable specific built-in checks (by ecko check name)
