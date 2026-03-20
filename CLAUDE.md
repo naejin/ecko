@@ -17,6 +17,8 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `CHANGELOG.md` — version history for all releases
 
 ## Design constraints
+- Stop hook output must NEVER contain file-write instructions or paths — only short tips. The stop hook fires PostToolUse hooks on Write/Edit; instructing Claude to write from stop output creates an infinite loop. `/ecko:reverb` exists so file creation is user-initiated only.
+- Slash commands (commands/*.md) use `$ARGUMENTS` for user input and `${CLAUDE_PLUGIN_ROOT}` for plugin paths — both set by Claude Code at invocation time
 - `checks/regex_utils.py` is a pure utility (imports only `re` + `threading` + `typing`) — no `emit()`, no I/O. All ReDoS-safe regex goes through it. `_run_with_timeout` is the shared thread helper; `_SENTINEL` distinguishes timeout from function-returned-None.
 - `checks/fileutil.py` is a pure utility (imports only `os`) — canonical test-file predicate, single source of truth
 - `banned_patterns` uses `safe_regex_finditer` over full source (1 thread per pattern, not per line) with `bisect` for line numbers
@@ -124,6 +126,10 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - If CI fails, fix and push again — do NOT tag until all 6 jobs are green (the v0.6.0 release needed a Windows CI fix before tagging)
 - Tag, push tag, `gh release create v{X} --title "..." --notes-file /tmp/release-notes.md` (flag is `-F`/`--notes-file`, NOT `--body`)
 - Verify with: `curl -fsSL https://raw.githubusercontent.com/naejin/ecko/main/scripts/install.sh | bash`
+- Update `commands/` listing in Structure section of CLAUDE.md if adding/removing commands
+- Update commands table in README.md if adding/removing commands
+- Update `docs/ideas/ideas-done.md` and `ideas-todo.md`
+- CHANGELOG test count must match actual `pytest` output (currently 314)
 
 ## Transparency (v0.6.0)
 - Tool adapter failure reporting: all adapters catch `TimeoutExpired` vs `OSError` separately, emit `~~ ecko ~~ warning: {tool} timed out/failed` to stderr
@@ -135,6 +141,12 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Bash guard catches full-path (`/bin/rm`), backslash-escaped (`\rm`), `command rm`, and `git -C` prefix bypass variants
 - `banned_patterns` `re.compile()` runs inside timeout protection (same as `re.search()`)
 - Import-layer echoes report actual line numbers (AST lineno for Python, regex offset for JS/TS)
+
+## Reverb/Tune lifecycle (v0.6.1)
+- Stop hook (runner.py): emits `~~ ecko ~~ tip: run /ecko:reverb` when `reverb: enabled` and echoes found — single line only, no file ops
+- `/ecko:reverb`: user-initiated, creates `.ecko-reverb/{YYYY-MM-DD}-{slug}.md` with echo summary + reflection
+- `/ecko:tune`: reads all `.ecko-reverb/*.md`, deduplicates, presents numbered interactive list, applies user selection to `ecko.yaml`, deletes ALL read reverb notes (even on "none")
+- `.ecko-reverb/` is in `_DEFAULT_EXCLUDE_DIRS` — reverb notes are never linted
 
 ## Current version and next milestone
 - Current: v0.6.1 (tech debt + reverb/tune UX)
