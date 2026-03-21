@@ -359,6 +359,30 @@ def get_cross_file_echo_cap(config: dict[str, Any]) -> int:
 _RUFF_RULE_RE = re.compile(r"^[A-Z]+[0-9]*$")
 
 
+def get_ruff_use_project_config(config: dict[str, Any]) -> bool:
+    """Return whether ruff should use the project's own config instead of ecko's rules."""
+    val = config.get("ruff_use_project_config", False)
+    if isinstance(val, bool):
+        return val
+    return False
+
+
+def get_biome_use_project_config(config: dict[str, Any]) -> bool:
+    """Return whether biome should use the project's own config instead of ecko's."""
+    val = config.get("biome_use_project_config", False)
+    if isinstance(val, bool):
+        return val
+    return False
+
+
+def get_output_format(config: dict[str, Any]) -> str:
+    """Return the output format: 'text' (default) or 'json'."""
+    val = config.get("output_format", "text")
+    if isinstance(val, str) and val in ("text", "json"):
+        return val
+    return "text"
+
+
 def get_ruff_extra_rules(config: dict[str, Any]) -> list[str]:
     """Return list of extra ruff rule codes from config.
 
@@ -393,7 +417,10 @@ _KNOWN_KEYS = frozenset(
         "disabled_checks",
         "session_hours",
         "echo_cap_cross_file",
+        "biome_use_project_config",
+        "output_format",
         "ruff_extra_rules",
+        "ruff_use_project_config",
     }
 )
 

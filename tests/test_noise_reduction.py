@@ -152,19 +152,21 @@ class TestEchoCap:
     def test_unlimited_cap(self):
         assert get_echo_cap({"echo_cap_per_check": 0}) == 0
 
-    def test_cap_limits_same_check(self):
+    def test_compact_overflow_when_many_lines(self):
+        """More than 3 lines per check shows +N overflow in compact format."""
         echoes = [
             Echo(check="var-declarations", line=i, message=f"msg{i}")
             for i in range(1, 6)
         ]
-        output = format_file_echoes("test.ts", echoes, echo_cap=2)
-        assert "5 echoes in test.ts" in output  # header shows total
-        assert "var-declarations (line 1)" in output
-        assert "var-declarations (line 2)" in output
-        assert "var-declarations (line 3)" not in output
-        assert "... and 3 more var-declarations" in output
+        output = format_file_echoes("test.ts", echoes)
+        assert "test.ts" in output
+        assert "var-declarations" in output
+        assert "+2" in output  # 5 lines, 3 shown, +2 overflow
+        assert "L1" in output
+        assert "L2" in output
+        assert "L3" in output
 
-    def test_cap_mixed_checks(self):
+    def test_compact_mixed_checks(self):
         echoes = [
             Echo(check="check-a", line=1, message="a1"),
             Echo(check="check-a", line=2, message="a2"),
@@ -174,40 +176,39 @@ class TestEchoCap:
             Echo(check="check-b", line=6, message="b2"),
             Echo(check="check-b", line=7, message="b3"),
         ]
-        output = format_file_echoes("test.py", echoes, echo_cap=2)
-        assert "7 echoes in test.py" in output
-        assert "... and 2 more check-a" in output
-        assert "... and 1 more check-b" in output
+        output = format_file_echoes("test.py", echoes)
+        assert "check-a" in output
+        assert "check-b" in output
+        assert "+1" in output  # check-a has 4 lines (3 shown + 1)
 
-    def test_cap_zero_unlimited(self):
+    def test_compact_no_overflow_within_limit(self):
         echoes = [
-            Echo(check="a", line=i, message=f"m{i}") for i in range(1, 11)
+            Echo(check="a", line=i, message=f"m{i}") for i in range(1, 4)
         ]
-        output = format_file_echoes("test.py", echoes, echo_cap=0)
-        assert "10 echoes" in output
-        assert "... and" not in output
+        output = format_file_echoes("test.py", echoes)
+        assert "+" not in output  # exactly 3 lines, no overflow
+        assert "L1, L2, L3" in output
 
-    def test_cap_stop_echoes(self):
+    def test_compact_stop_echoes(self):
         file_echoes = {
             "a.py": [
                 Echo(check="dead-code", line=i, message=f"dc{i}")
                 for i in range(1, 6)
             ]
         }
-        output = format_stop_echoes(file_echoes, echo_cap=2)
-        assert "5 echoes across 1 file" in output  # header total
-        assert "... and 3 more dead-code" in output
+        output = format_stop_echoes(file_echoes)
+        assert "5 echoes across 1 file" in output
+        assert "a.py" in output
+        assert "dead-code" in output
 
-    def test_disabled_checks_interaction(self):
-        """When disabled_checks filters some echoes, cap applies to remaining."""
+    def test_compact_single_line_per_file(self):
+        """Compact format should produce one line per file."""
         echoes = [
             Echo(check="a", line=i, message=f"m{i}") for i in range(1, 9)
         ]
-        # Simulate disabled_checks removing 3 echoes
-        filtered = echoes[:5]  # 5 remain after filtering
-        output = format_file_echoes("test.py", filtered, echo_cap=5)
-        assert "5 echoes" in output
-        assert "... and" not in output  # exactly at cap, no overflow
+        filtered = echoes[:5]
+        output = format_file_echoes("test.py", filtered)
+        assert output.count("\n") == 1  # single line + newline
 
 
 # --- Step 5: unreachable-code yield-after-raise ---

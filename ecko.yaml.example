@@ -14,6 +14,8 @@ deep_analysis:
   pyright: true              # default: true (if installed)
   vulture: true              # default: true (if installed)
   knip: true                 # default: true (if installed)
+  golangci-lint: true        # default: true (if installed, Go projects)
+  clippy: true               # default: true (if cargo + Cargo.toml, Rust projects)
 
 # Custom rules - banned regex patterns
 # glob: matches against both the file basename and the path relative to
@@ -94,6 +96,23 @@ reverb:
 # Default: 0 (unlimited). Per-file cap (echo_cap_per_check) still applies.
 # echo_cap_cross_file: 15
 
+# Output format — "text" (default) or "json" for machine-readable output
+# JSON mode emits schema_version 1 with complete echo data (no echo caps applied).
+# Exit codes remain the same regardless of format.
+# output_format: text
+
+# Use project biome config — when true, biome defers to your project's biome.json /
+# biome.jsonc instead of ecko's bundled config.
+# Unknown biome rules are auto-mapped to kebab-case ecko check names
+# (e.g., noDoubleEquals -> no-double-equals) and can be disabled via disabled_checks.
+# biome_use_project_config: false
+
+# Use project ruff config — when true, ruff defers to your project's ruff.toml /
+# pyproject.toml [tool.ruff] instead of ecko's built-in rule selection.
+# --no-fix is always enforced (safety invariant). Echoes are still filtered by
+# disabled_checks using ecko check names.
+# ruff_use_project_config: false
+
 # Extra ruff rules — append additional ruff rule codes to ecko's built-in checks
 # Accepts full codes (C901, N801) and category prefixes (UP, SIM, C4).
 # Unmapped codes use their lowercased code as the check name (e.g., C901 -> c901).
@@ -106,6 +125,8 @@ reverb:
 #   - SIM101   # use a single if instead of nested ifs
 
 # Disable specific built-in checks (by ecko check name)
+# Also suppresses ruff/biome codes mapped to that check name
+# (e.g., disabled_checks: [c901] suppresses ruff C901)
 # Available checks: unused-imports, singleton-comparison, bare-except,
 #   star-imports, mutable-default-args, builtin-shadowing,
 #   empty-block-statements (biome),

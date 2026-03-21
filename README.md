@@ -1,6 +1,6 @@
 # ecko
 
-[![v0.8.0](https://img.shields.io/badge/version-0.8.0-blue)](https://github.com/naejin/ecko/releases/tag/v0.8.0)
+[![v1.3.0](https://img.shields.io/badge/version-1.3.0-blue)](https://github.com/naejin/ecko/releases/tag/v1.3.0)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-plugin-7c3aed)](https://docs.anthropic.com/en/docs/claude-code)
 [![Python](https://img.shields.io/badge/python-3.10+-3776ab?logo=python&logoColor=white)](https://python.org)
 [![TypeScript](https://img.shields.io/badge/typescript-supported-3178c6?logo=typescript&logoColor=white)](https://typescriptlang.org)
@@ -187,6 +187,7 @@ When the stop hook fires with echoes, it tips you to run `/ecko:reverb`. That co
 | `/ecko:setup` | Install missing tools interactively |
 | `/ecko:reverb` | Capture a session note about what went wrong |
 | `/ecko:tune` | Analyze reverb notes and codebase, recommend ecko.yaml rules |
+| `/ecko:session` | Show session echo summary — files, top checks, self-corrections |
 
 ## Configuration
 

@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from checks.result import Echo, format_correction_summary, format_file_echoes, format_stop_echoes
+from checks.result import (
+    Echo,
+    format_correction_summary,
+    format_file_echoes,
+    format_session_stats,
+    format_stop_echoes,
+)
 
 
 class TestFormatFileEchoes:
@@ -13,22 +19,44 @@ class TestFormatFileEchoes:
         echoes = [Echo(check="unused-imports", line=3, message="`os` is unused.")]
         output = format_file_echoes("test.py", echoes)
         assert "~~ ecko ~~" in output
-        assert "1 echo in test.py" in output
-        assert "unused-imports (line 3)" in output
-        assert "`os` is unused." in output
+        assert "test.py" in output
+        assert "unused-imports (L3)" in output
 
-    def test_multiple_echoes(self):
+    def test_multiple_echoes_same_check(self):
         echoes = [
-            Echo(check="a", line=1, message="msg1"),
-            Echo(check="b", line=2, message="msg2"),
+            Echo(check="unused-imports", line=5, message="m1"),
+            Echo(check="unused-imports", line=10, message="m2"),
         ]
         output = format_file_echoes("test.py", echoes)
-        assert "2 echoes in test.py" in output
+        assert "unused-imports (L5, L10)" in output
 
-    def test_suggestion_included(self):
-        echoes = [Echo(check="a", line=1, message="msg", suggestion="Fix it.")]
+    def test_multiple_checks(self):
+        echoes = [
+            Echo(check="unused-imports", line=5, message="m1"),
+            Echo(check="bare-except", line=30, message="m2", severity="error"),
+        ]
         output = format_file_echoes("test.py", echoes)
-        assert "Fix it." in output
+        assert "unused-imports (L5)" in output
+        assert "[error] bare-except (L30)" in output
+
+    def test_compact_one_line(self):
+        """Output should be a single line."""
+        echoes = [
+            Echo(check="unused-imports", line=5, message="m1"),
+            Echo(check="bare-except", line=30, message="m2"),
+        ]
+        output = format_file_echoes("test.py", echoes)
+        # Should be one line (plus trailing newline)
+        assert output.count("\n") == 1
+
+    def test_overflow_when_many_lines(self):
+        """More than 3 line numbers per check should show +N overflow."""
+        echoes = [Echo(check="unused-imports", line=i, message="m") for i in range(1, 8)]
+        output = format_file_echoes("test.py", echoes)
+        assert "+4" in output
+        assert "L1" in output
+        assert "L2" in output
+        assert "L3" in output
 
 
 class TestFormatStopEchoes:
@@ -40,9 +68,9 @@ class TestFormatStopEchoes:
             "src/a.py": [Echo(check="type-error", line=10, message="bad type")]
         }
         output = format_stop_echoes(file_echoes)
-        assert "~~ ecko ~~  final sweep" in output
         assert "1 echo across 1 file" in output
-        assert "src/a.py:" in output
+        assert "src/a.py" in output
+        assert "type-error (L10)" in output
 
     def test_multiple_files(self):
         file_echoes = {
@@ -51,6 +79,18 @@ class TestFormatStopEchoes:
         }
         output = format_stop_echoes(file_echoes)
         assert "2 echoes across 2 files" in output
+        assert "a.py" in output
+        assert "b.py" in output
+
+    def test_compact_one_line_per_file(self):
+        """Each file should get one line in the output."""
+        file_echoes = {
+            "a.py": [Echo(check="unused-imports", line=1, message="m")],
+            "b.py": [Echo(check="dead-code", line=2, message="m")],
+        }
+        output = format_stop_echoes(file_echoes)
+        lines = [l for l in output.strip().split("\n") if l.strip()]
+        assert len(lines) == 3  # header + 2 file lines
 
 
 class TestCrossFileCap:
@@ -68,8 +108,7 @@ class TestCrossFileCap:
             "b.py": [Echo(check="unused-imports", line=i, message="m") for i in range(5)],
         }
         output = format_stop_echoes(file_echoes, cross_file_cap=3)
-        # Only 3 unused-imports should be shown, rest in overflow
-        assert "more unused-imports" in output
+        assert "capped" in output
 
     def test_different_checks_independent(self):
         file_echoes = {
@@ -83,9 +122,9 @@ class TestCrossFileCap:
             ],
         }
         output = format_stop_echoes(file_echoes, cross_file_cap=1)
-        # Both checks capped at 1, so 2 overflow (1 unused-imports + 1 type-error)
-        assert "more unused-imports" in output
-        assert "more type-error" in output
+        assert "unused-imports" in output
+        assert "type-error" in output
+        assert "capped" in output
 
     def test_overflow_message_includes_advice(self):
         file_echoes = {
@@ -93,16 +132,6 @@ class TestCrossFileCap:
         }
         output = format_stop_echoes(file_echoes, cross_file_cap=2)
         assert "echo_cap_cross_file" in output
-
-    def test_cap_with_per_file_cap(self):
-        """Cross-file cap and per-file cap should coexist."""
-        file_echoes = {
-            "a.py": [Echo(check="x", line=i, message="m") for i in range(10)],
-            "b.py": [Echo(check="x", line=i, message="m") for i in range(10)],
-        }
-        output = format_stop_echoes(file_echoes, echo_cap=3, cross_file_cap=5)
-        # Per-file cap limits to 3 per file displayed, cross-file cap to 5 total
-        assert "more x" in output
 
 
 class TestFormatCorrectionSummary:
@@ -129,3 +158,35 @@ class TestFormatCorrectionSummary:
         result = format_correction_summary({"unused-imports": 2})
         assert "/" not in result
         assert "\\" not in result
+
+
+class TestFormatSessionStats:
+    def test_empty_entries(self):
+        assert format_session_stats([], {}) == ""
+
+    def test_entries_with_echoes(self):
+        entries = [
+            {"file": "a.py", "echoes": {"unused-imports": 2, "bare-except": 1}},
+            {"file": "b.py", "echoes": {"unused-imports": 1}},
+        ]
+        result = format_session_stats(entries, {})
+        assert "4 echoes" in result
+        assert "2 files" in result
+        assert "~~ ecko ~~ session:" in result
+        assert "self-corrected" not in result
+
+    def test_entries_with_corrections(self):
+        entries = [
+            {"file": "a.py", "echoes": {"unused-imports": 2}},
+        ]
+        corrections = {"unused-imports": 2}
+        result = format_session_stats(entries, corrections)
+        assert "2 self-corrected" in result
+
+    def test_entries_clean_files(self):
+        entries = [
+            {"file": "a.py", "echoes": {}},
+        ]
+        result = format_session_stats(entries, {})
+        assert "0 echoes" in result
+        assert "1 files" in result

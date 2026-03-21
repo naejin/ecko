@@ -92,6 +92,7 @@ def _check_body(
                     line=stmt.lineno,
                     message="Unreachable code after return/raise/break/continue.",
                     suggestion="Remove the unreachable statement.",
+                    severity="error",
                 )
             )
             break  # Only report the first unreachable statement per body

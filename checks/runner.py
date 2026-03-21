@@ -17,14 +17,16 @@ from fnmatch import fnmatch
 from checks.bash_guard import check_bash_command, run_pre_tool_use_bash  # noqa: F401
 from checks.config import (
     get_banned_patterns,
+    get_biome_use_project_config,
     get_builtin_shadow_allowlist,
     get_cross_file_echo_cap,
     get_disabled_checks,
-    get_echo_cap,
     get_exclude_patterns,
     get_import_rules,
     get_obsolete_terms,
+    get_output_format,
     get_ruff_extra_rules,
+    get_ruff_use_project_config,
     get_session_hours,
     is_deep_enabled,
     is_reverb_enabled,
@@ -39,7 +41,10 @@ from checks.result import (
     emit,
     format_correction_summary,
     format_file_echoes,
+    format_file_echoes_json,
+    format_session_stats,
     format_stop_echoes,
+    format_stop_echoes_json,
 )
 
 # Re-exports for backward compatibility (moved to checks.git)
@@ -70,10 +75,15 @@ LANG_MAP = {
     ".tsx": "typescript",
     ".js": "javascript",
     ".jsx": "javascript",
+    ".go": "go",
+    ".rs": "rust",
     ".css": "css",
     ".json": "json",
     ".md": "markdown",
 }
+
+
+# --- Language detection ---
 
 
 def detect_language(file_path: str) -> str:
@@ -84,6 +94,9 @@ def detect_language(file_path: str) -> str:
 def _is_skippable_stub(file_path: str) -> bool:
     """Check if a file is a type stub or tsd assertion file that should skip linting."""
     return file_path.endswith(".pyi") or file_path.endswith(".test-d.ts")
+
+
+# --- Filtering ---
 
 
 def is_excluded(file_path: str, cwd: str, user_excludes: list[str]) -> bool:
@@ -185,6 +198,8 @@ def _emit_config_warnings(config: dict, cwd: str) -> None:
         emit(f"~~ ecko ~~ warning: {w}\n")
 
 
+# --- Tool availability ---
+
 _INSTALL_HINTS: dict[str, str] = {
     "ruff": "pip install ruff (or uvx ruff)",
     "biome": "npm i -D @biomejs/biome (or npx @biomejs/biome)",
@@ -192,6 +207,8 @@ _INSTALL_HINTS: dict[str, str] = {
     "tsc": "npm i -D typescript",
     "vulture": "pip install vulture (or uvx vulture)",
     "knip": "npm i -D knip (or npx knip)",
+    "golangci-lint": "go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest",
+    "clippy": "Install Rust toolchain: https://rustup.rs",
 }
 
 
@@ -201,6 +218,9 @@ def _emit_skipped_tools(skipped: list[str]) -> None:
         hint = _INSTALL_HINTS.get(tool, "")
         suffix = f" — try: {hint}" if hint else ""
         emit(f"~~ ecko ~~ note: {tool} not found{suffix}\n")
+
+
+# --- Layer 2 dispatch ---
 
 
 def _run_layer2_checks(
@@ -215,6 +235,8 @@ def _run_layer2_checks(
     ruff_available: bool = False,
     biome_available: bool = False,
     extra_ruff_rules: list[str] | None = None,
+    use_ruff_project_config: bool = False,
+    use_biome_project_config: bool = False,
 ) -> tuple[list[Echo], list[str]]:
     """Run Layer 2 checks on a single file.
 
@@ -237,6 +259,7 @@ def _run_layer2_checks(
                     file_path,
                     builtin_shadow_allowlist=shadow_allowlist,
                     extra_rules=extra_ruff_rules,
+                    use_project_config=use_ruff_project_config,
                 )
             )
     elif lang in ("typescript", "javascript"):
@@ -245,7 +268,13 @@ def _run_layer2_checks(
         else:
             from checks.tools.biome_adapter import run_biome
 
-            echoes.extend(run_biome(file_path, plugin_root))
+            echoes.extend(
+                run_biome(
+                    file_path,
+                    plugin_root,
+                    use_project_config=use_biome_project_config,
+                )
+            )
 
     # Custom checks (Python AST)
     if lang == "python":
@@ -315,8 +344,10 @@ def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
 
     disabled = get_disabled_checks(config)
     shadow_allowlist = get_builtin_shadow_allowlist(config)
-    echo_cap = get_echo_cap(config)
     extra_ruff_rules = get_ruff_extra_rules(config)
+    use_ruff_project = get_ruff_use_project_config(config)
+    use_biome_project = get_biome_use_project_config(config)
+    output_format = get_output_format(config)
     lang = detect_language(file_path)
     debug(f"lang={lang} for {os.path.basename(file_path)}")
 
@@ -345,6 +376,8 @@ def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
         ruff_available=ruff_available,
         biome_available=biome_available,
         extra_ruff_rules=extra_ruff_rules,
+        use_ruff_project_config=use_ruff_project,
+        use_biome_project_config=use_biome_project,
     )
 
     # Filter
@@ -367,9 +400,15 @@ def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
             pass
 
     if echoes:
-        emit(format_file_echoes(file_path, echoes, echo_cap=echo_cap))
+        if output_format == "json":
+            emit(format_file_echoes_json(file_path, echoes, skipped_tools=skipped))
+        else:
+            emit(format_file_echoes(file_path, echoes))
         return 1
     return 0
+
+
+# --- Layer 3 dispatch ---
 
 
 def run_stop(
@@ -384,14 +423,41 @@ def run_stop(
     disabled = get_disabled_checks(config)
     user_excludes = get_exclude_patterns(config)
     shadow_allowlist = get_builtin_shadow_allowlist(config)
-    echo_cap = get_echo_cap(config)
     import_rules = get_import_rules(config)
+    output_format = get_output_format(config)
 
     # Find modified files, filtering excluded paths
+    session_hours = get_session_hours(config)
     if files_override is not None:
         raw_files = [_normalize_path(f, cwd) for f in files_override]
     else:
-        raw_files = get_modified_files(cwd, session_hours=get_session_hours(config))
+        raw_files = get_modified_files(cwd, session_hours=session_hours)
+
+    # Read session ledger once — used for scoping AND later for corrections/stats.
+    session_entries: list[dict] = []
+    if session_hours > 0:
+        try:
+            from checks.ledger import read_session
+
+            session_entries = read_session(cwd, session_hours=session_hours)
+        except Exception:
+            pass
+
+    # Scope to ledger-tracked files when available.
+    # Prevents flooding with pre-existing issues on first use of existing projects:
+    # get_modified_files includes git log --since files the agent never touched.
+    if files_override is None and session_entries:
+        ledger_files = {
+            _normalize_path(e.get("file", ""), cwd)
+            for e in session_entries
+            if e.get("mode") == "post-tool-use" and e.get("file")
+        }
+        if ledger_files:
+            raw_files = [f for f in raw_files if f in ledger_files]
+            debug(
+                f"stop: scoped to {len(raw_files)} ledger-tracked files (from {len(ledger_files)} ledger entries)"
+            )
+
     modified = [f for f in raw_files if not is_excluded(f, cwd, user_excludes)]
     if not modified:
         return 0
@@ -400,7 +466,11 @@ def run_stop(
     ts_files = [
         f for f in modified if detect_language(f) in ("typescript", "javascript")
     ]
-    debug(f"stop: {len(modified)} modified ({len(py_files)} py, {len(ts_files)} ts/js)")
+    go_files = [f for f in modified if detect_language(f) == "go"]
+    rs_files = [f for f in modified if detect_language(f) == "rust"]
+    debug(
+        f"stop: {len(modified)} modified ({len(py_files)} py, {len(ts_files)} ts/js, {len(go_files)} go, {len(rs_files)} rs)"
+    )
 
     all_echoes: dict[str, list[Echo]] = {}
     skipped: list[str] = []
@@ -408,7 +478,11 @@ def run_stop(
     # --- Layer 3: Deep analysis (parallelized) ---
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    from checks.tools.resolve import resolve_node_tool, resolve_python_tool
+    from checks.tools.resolve import (
+        resolve_binary_tool,
+        resolve_node_tool,
+        resolve_python_tool,
+    )
 
     # Build set of normalized modified paths for post-filtering
     modified_set = {_normalize_path(f, cwd) for f in modified}
@@ -432,6 +506,16 @@ def run_stop(
         from checks.tools.knip_adapter import run_knip
 
         return run_knip(cwd)
+
+    def _run_golangci() -> dict[str, list[Echo]]:
+        from checks.tools.golangci_adapter import run_golangci
+
+        return run_golangci(cwd, modified_files=go_files)
+
+    def _run_clippy() -> dict[str, list[Echo]]:
+        from checks.tools.clippy_adapter import run_clippy
+
+        return run_clippy(cwd, modified_files=rs_files)
 
     futures = {}
     with ThreadPoolExecutor(max_workers=4) as pool:
@@ -461,6 +545,22 @@ def run_stop(
             else:
                 futures[pool.submit(_run_knip)] = "knip"
 
+        if go_files and is_deep_enabled(config, "golangci-lint"):
+            if resolve_binary_tool("golangci-lint") is None:
+                skipped.append("golangci-lint")
+            else:
+                futures[pool.submit(_run_golangci)] = "golangci-lint"
+
+        if (
+            rs_files
+            and is_deep_enabled(config, "clippy")
+            and os.path.isfile(os.path.join(cwd, "Cargo.toml"))
+        ):
+            if resolve_binary_tool("cargo") is None:
+                skipped.append("clippy")
+            else:
+                futures[pool.submit(_run_clippy)] = "clippy"
+
         debug(f"layer3: dispatched {list(futures.values())}")
         layer3_t0 = time.monotonic()
         for future in as_completed(futures):
@@ -486,6 +586,8 @@ def run_stop(
     banned = get_banned_patterns(config)
     obsolete = get_obsolete_terms(config)
     extra_ruff_rules = get_ruff_extra_rules(config)
+    use_ruff_project = get_ruff_use_project_config(config)
+    use_biome_project = get_biome_use_project_config(config)
 
     # Check Layer 2 tool availability once before the loop
     ruff_available = resolve_python_tool("ruff") is not None
@@ -514,6 +616,8 @@ def run_stop(
             ruff_available=ruff_available,
             biome_available=biome_available,
             extra_ruff_rules=extra_ruff_rules,
+            use_ruff_project_config=use_ruff_project,
+            use_biome_project_config=use_biome_project,
         )
         if echoes:
             all_echoes.setdefault(_normalize_path(file_path, cwd), []).extend(echoes)
@@ -545,20 +649,39 @@ def run_stop(
 
     elapsed = time.monotonic() - t0
 
-    # Session ledger: read + self-correction summary
+    # Session ledger: self-correction + session stats (uses session_entries read earlier)
     correction_line = ""
-    session_hours = get_session_hours(config)
-    if session_hours > 0:
+    session_line = ""
+    corrections: dict[str, int] = {}
+    if session_entries:
         try:
-            from checks.ledger import compute_self_corrections, read_session
+            from checks.ledger import compute_self_corrections
 
-            entries = read_session(cwd, session_hours=session_hours)
-            corrections = compute_self_corrections(entries)
-            correction_line = format_correction_summary(corrections)  # from result.py
+            corrections = compute_self_corrections(session_entries)
+            correction_line = format_correction_summary(corrections)
+            session_line = format_session_stats(session_entries, corrections)
         except Exception:
             pass
 
     cross_cap = get_cross_file_echo_cap(config)
+
+    if output_format == "json":
+        emit(
+            format_stop_echoes_json(
+                all_echoes,
+                elapsed=elapsed,
+                skipped_tools=skipped,
+                corrections=corrections,
+            )
+        )
+        return 1 if all_echoes else 0
+
+    # Emit session ledger lines (correction summary + stats) after main output
+    def _emit_session_lines() -> None:
+        if correction_line:
+            emit(correction_line)
+        if session_line:
+            emit(session_line)
 
     if not all_echoes:
         emit(
@@ -566,17 +689,81 @@ def run_stop(
             f" {len(modified)} file{'s' if len(modified) != 1 else ''}"
             f" ({elapsed:.1f}s)\n"
         )
-        if correction_line:
-            emit(correction_line)
+        _emit_session_lines()
         return 0
 
-    emit(format_stop_echoes(all_echoes, echo_cap=echo_cap, cross_file_cap=cross_cap))
+    emit(format_stop_echoes(all_echoes, cross_file_cap=cross_cap))
     emit(f"~~ ecko ~~ finished in {elapsed:.1f}s\n")
-    if correction_line:
-        emit(correction_line)
+    _emit_session_lines()
     if is_reverb_enabled(config):
         emit("~~ ecko ~~ tip: run /ecko:reverb to capture what went wrong\n")
     return 1
+
+
+def run_dry_run(file_path: str, cwd: str, plugin_root: str) -> int:
+    """List which checks would run for a file without executing any tools."""
+    import shutil
+
+    from checks.tools.resolve import resolve_node_tool, resolve_python_tool
+
+    config = load_config(cwd)
+    disabled = get_disabled_checks(config)
+    lang = detect_language(file_path)
+
+    print(f"~~ ecko dry-run ~~ {file_path}")
+    print(f"  Language: {lang}")
+    print()
+
+    checks: list[tuple[str, str]] = []  # (check_name, status)
+
+    if lang == "python":
+        ruff = resolve_python_tool("ruff")
+        checks.append(("ruff", "available" if ruff else "not found"))
+        checks.append(("duplicate-keys", "built-in"))
+        checks.append(("unreachable-code", "built-in"))
+        if is_test_file(file_path):
+            checks.append(("test-quality", "built-in"))
+        else:
+            checks.append(("placeholder-code", "built-in"))
+        pyright = resolve_python_tool("pyright")
+        checks.append(("pyright", "available (Layer 3)" if pyright else "not found"))
+        vulture = resolve_python_tool("vulture")
+        checks.append(("vulture", "available (Layer 3)" if vulture else "not found"))
+    elif lang in ("typescript", "javascript"):
+        biome = resolve_node_tool("biome")
+        checks.append(("biome", "available" if biome else "not found"))
+        if not is_test_file(file_path):
+            checks.append(("placeholder-code-js", "built-in"))
+        tsc = resolve_node_tool("tsc", package="typescript")
+        checks.append(("tsc", "available (Layer 3)" if tsc else "not found"))
+        knip = resolve_node_tool("knip")
+        checks.append(("knip", "available (Layer 3)" if knip else "not found"))
+    elif lang == "go":
+        golangci = shutil.which("golangci-lint")
+        checks.append(
+            ("golangci-lint", "available (Layer 3)" if golangci else "not found")
+        )
+    elif lang == "rust":
+        cargo = shutil.which("cargo")
+        checks.append(("clippy", "available (Layer 3)" if cargo else "not found"))
+    else:
+        print("  No checks configured for this file type.")
+        return 0
+
+    # Universal checks
+    checks.append(("unicode-artifact", "built-in"))
+
+    print("  Checks:")
+    for name, status in checks:
+        if name in disabled:
+            status = "disabled"
+        print(f"    {name}: {status}")
+
+    print()
+    if disabled:
+        print(f"  Disabled checks: {', '.join(sorted(disabled))}")
+
+    return 0
 
 
 def main() -> None:
@@ -584,7 +771,7 @@ def main() -> None:
     parser.add_argument("--file", help="File to check (PostToolUse mode)")
     parser.add_argument(
         "--mode",
-        choices=["post-tool-use", "stop", "pre-tool-use-bash"],
+        choices=["post-tool-use", "stop", "pre-tool-use-bash", "dry-run"],
         required=True,
         help="Run mode",
     )
@@ -607,6 +794,11 @@ def main() -> None:
         exit_code = run_stop(args.cwd, args.plugin_root, files_override=files_override)
     elif args.mode == "pre-tool-use-bash":
         exit_code = run_pre_tool_use_bash(args.cwd)
+    elif args.mode == "dry-run":
+        if not args.file:
+            print("--file is required for dry-run mode", file=sys.stderr)
+            sys.exit(2)
+        exit_code = run_dry_run(args.file, args.cwd, args.plugin_root)
     else:
         exit_code = 0
     debug(f"exit_code={exit_code}")

@@ -23,6 +23,13 @@ _ALWAYS_SKIP = {
     "sender",                                        # signal/event handlers
 }
 
+# Framework-specific skip lists — params injected by the framework
+_FRAMEWORK_VULTURE_SKIPS: dict[str, set[str]] = {
+    "fastapi": {"db", "session", "request", "response", "Depends"},
+    "flask": {"app", "g", "request", "session"},
+    "django": {"request", "queryset", "Meta", "verbose_name"},
+}
+
 # pytest built-in fixtures — only skip in test/conftest files.
 _PYTEST_SKIP = {
     "tmp_path", "tmp_path_factory", "capsys", "capfd", "caplog",
@@ -174,6 +181,17 @@ def run_vulture(
     project_fixtures = _collect_fixture_names(cwd)
     effective_skip = _PYTEST_SKIP | project_fixtures
 
+    # Extend skip set with framework-specific params
+    from checks.fingerprint import detect_frameworks
+
+    framework_skip: set[str] = set()
+    try:
+        frameworks = detect_frameworks(cwd)
+        for fw in frameworks:
+            framework_skip |= _FRAMEWORK_VULTURE_SKIPS.get(fw, set())
+    except Exception:
+        pass
+
     file_echoes: dict[str, list[Echo]] = {}
     for line in output.splitlines():
         match = VULTURE_PATTERN.match(line.strip())
@@ -184,7 +202,7 @@ def run_vulture(
             name_match = _NAME_RE.search(message)
             if name_match:
                 name = name_match.group(1)
-                if name in _ALWAYS_SKIP:
+                if name in _ALWAYS_SKIP or name in framework_skip:
                     continue
                 if name.startswith("__"):
                     continue

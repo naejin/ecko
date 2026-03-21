@@ -181,7 +181,7 @@ class TestBiomeAdapterParsing:
 
     @patch("checks.tools.biome_adapter.resolve_node_tool")
     @patch("subprocess.run")
-    def test_unknown_rule_skipped(self, mock_run, mock_resolve):
+    def test_unknown_rule_skipped_without_project_config(self, mock_run, mock_resolve):
         mock_resolve.return_value = ["biome"]
         data = {
             "diagnostics": [

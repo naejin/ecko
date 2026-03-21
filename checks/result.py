@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from dataclasses import dataclass
 
@@ -12,106 +13,90 @@ class Echo:
     line: int
     message: str
     suggestion: str = ""
+    severity: str = "warn"
 
 
-_CAP_ADVICE = "capped at {cap} per check — set echo_cap_per_check: 0 in ecko.yaml to see all"
+# Max line numbers shown per check in compact format
+_COMPACT_LINES_PER_CHECK = 3
 
 
-def _cap_echoes(
-    echoes: list[Echo], echo_cap: int
-) -> tuple[list[Echo], dict[str, int]]:
-    """Apply per-check cap. Returns (displayed echoes, overflow counts by check)."""
-    if echo_cap <= 0:
-        return echoes, {}
-    counts: dict[str, int] = {}
-    displayed: list[Echo] = []
-    overflow: dict[str, int] = {}
-    for echo in echoes:
-        counts[echo.check] = counts.get(echo.check, 0) + 1
-        if counts[echo.check] <= echo_cap:
-            displayed.append(echo)
+def _format_compact_checks(echoes: list[Echo]) -> str:
+    """Format echoes as compact 'check (L1, L2 +N)' pairs."""
+    # Group by check, preserving order of first occurrence
+    by_check: dict[str, list[int]] = {}
+    severity_map: dict[str, str] = {}
+    for e in echoes:
+        by_check.setdefault(e.check, []).append(e.line)
+        if e.severity == "error":
+            severity_map[e.check] = "error"
+
+    parts: list[str] = []
+    for check, lines in by_check.items():
+        prefix = "[error] " if severity_map.get(check) == "error" else ""
+        if len(lines) <= _COMPACT_LINES_PER_CHECK:
+            line_str = ", ".join(f"L{ln}" for ln in lines)
         else:
-            overflow[echo.check] = overflow.get(echo.check, 0) + 1
-    return displayed, overflow
+            shown = ", ".join(f"L{ln}" for ln in lines[:_COMPACT_LINES_PER_CHECK])
+            line_str = f"{shown} +{len(lines) - _COMPACT_LINES_PER_CHECK}"
+        parts.append(f"{prefix}{check} ({line_str})")
+    return ", ".join(parts)
 
 
-def format_file_echoes(
-    file_path: str, echoes: list[Echo], echo_cap: int = 0
-) -> str:
-    """Format echoes for a single file (Layer 2 PostToolUse output)."""
+def format_file_echoes(file_path: str, echoes: list[Echo]) -> str:
+    """Format echoes for a single file (Layer 2 PostToolUse output).
+
+    Compact one-line format: ~~ ecko ~~ file — check (L1, L2), check2 (L5)
+    """
     if not echoes:
         return ""
-    total = len(echoes)
-    lines = [
-        f"~~ ecko ~~  {total} {'echo' if total == 1 else 'echoes'} in {file_path}",
-        "",
-    ]
-    displayed, overflow = _cap_echoes(echoes, echo_cap)
-    for i, echo in enumerate(displayed, 1):
-        lines.append(f"  {i}. {echo.check} (line {echo.line})")
-        lines.append(f"     {echo.message}")
-        if echo.suggestion:
-            lines.append(f"     {echo.suggestion}")
-        lines.append("")
-    for check, count in overflow.items():
-        lines.append(f"  ... and {count} more {check}")
-    if overflow:
-        lines.append(f"  ({_CAP_ADVICE.format(cap=echo_cap)})")
-        lines.append("")
-    return "\n".join(lines)
-
-
-_CROSS_CAP_ADVICE = "capped at {cap} per check across files — set echo_cap_cross_file: 0 in ecko.yaml to see all"
+    compact = _format_compact_checks(echoes)
+    return f"~~ ecko ~~ {file_path} — {compact}\n"
 
 
 def format_stop_echoes(
-    file_echoes: dict[str, list[Echo]], echo_cap: int = 0, cross_file_cap: int = 0
+    file_echoes: dict[str, list[Echo]], cross_file_cap: int = 0
 ) -> str:
-    """Format echoes for the stop hook (Layer 3 deep analysis output)."""
+    """Format echoes for the stop hook (Layer 3 deep analysis output).
+
+    Compact format: header line + one line per file.
+    """
     total = sum(len(e) for e in file_echoes.values())
     if total == 0:
         return ""
     file_count = len(file_echoes)
-    cap_note = f" (display capped at {cross_file_cap} per check)" if cross_file_cap > 0 else ""
-    lines = [
-        f"~~ ecko ~~  final sweep  ~~  {total} {'echo' if total == 1 else 'echoes'} across {file_count} {'file' if file_count == 1 else 'files'}{cap_note}",
-        "",
-    ]
+    header = (
+        f"~~ ecko ~~  {total} {'echo' if total == 1 else 'echoes'}"
+        f" across {file_count} {'file' if file_count == 1 else 'files'}"
+    )
+    lines = [header]
 
-    # Track per-check counts across all files for cross-file cap
+    # Apply cross-file cap: count echoes per check across all files
     cross_counts: dict[str, int] = {}
     cross_overflow: dict[str, int] = {}
 
-    i = 1
     for path, echoes in file_echoes.items():
-        lines.append(f"  {path}:")
-        displayed, overflow = _cap_echoes(echoes, echo_cap)
-        for echo in displayed:
-            # Apply cross-file cap
-            if cross_file_cap > 0:
+        if cross_file_cap > 0:
+            # Filter echoes that exceed the cross-file cap
+            filtered: list[Echo] = []
+            for echo in echoes:
                 cross_counts[echo.check] = cross_counts.get(echo.check, 0) + 1
-                if cross_counts[echo.check] > cross_file_cap:
+                if cross_counts[echo.check] <= cross_file_cap:
+                    filtered.append(echo)
+                else:
                     cross_overflow[echo.check] = cross_overflow.get(echo.check, 0) + 1
-                    continue
-            detail = echo.message
-            if echo.suggestion:
-                detail += f" {echo.suggestion}"
-            lines.append(f"    {i}. {echo.check} (line {echo.line}) \u2014 {detail}")
-            i += 1
-        for check, count in overflow.items():
-            lines.append(f"    ... and {count} more {check}")
-        if overflow:
-            lines.append(f"    ({_CAP_ADVICE.format(cap=echo_cap)})")
-        lines.append("")
+            if not filtered:
+                continue
+            compact = _format_compact_checks(filtered)
+        else:
+            compact = _format_compact_checks(echoes)
+        lines.append(f"  {path} — {compact}")
 
-    # Cross-file overflow summary
     if cross_overflow:
-        for check, count in cross_overflow.items():
-            lines.append(f"  ... and {count} more {check} across other files")
-        lines.append(f"  ({_CROSS_CAP_ADVICE.format(cap=cross_file_cap)})")
-        lines.append("")
+        lines[0] += f" (display capped at {cross_file_cap} per check)"
+        overflow_parts = [f"{check} +{count}" for check, count in cross_overflow.items()]
+        lines.append(f"  ... capped: {', '.join(overflow_parts)} (set echo_cap_cross_file: 0 to see all)")
 
-    return "\n".join(lines)
+    return "\n".join(lines) + "\n"
 
 
 def format_correction_summary(corrections: dict[str, int]) -> str:
@@ -125,6 +110,91 @@ def format_correction_summary(corrections: dict[str, int]) -> str:
     breakdown = sorted(corrections.items(), key=lambda x: -x[1])
     parts = [f"{count} {check}" for check, count in breakdown]
     return f"~~ ecko ~~ self-corrections: {fixed} fixed ({', '.join(parts)})\n"
+
+
+def format_session_stats(
+    entries: list[dict], corrections: dict[str, int]
+) -> str:
+    """Format a one-line session stats summary for stop hook output.
+
+    Returns empty string if no session data.
+    """
+    if not entries:
+        return ""
+    files: set[str] = set()
+    total_echoes = 0
+    for entry in entries:
+        f = entry.get("file", "")
+        if f:
+            files.add(f)
+        for count in entry.get("echoes", {}).values():
+            total_echoes += count
+    total_corrected = sum(corrections.values())
+    parts = [f"{total_echoes} echoes across {len(files)} files"]
+    if total_corrected:
+        parts.append(f"{total_corrected} self-corrected")
+    return f"~~ ecko ~~ session: {', '.join(parts)}\n"
+
+
+def format_file_echoes_json(
+    file_path: str,
+    echoes: list[Echo],
+    skipped_tools: list[str] | None = None,
+) -> str:
+    """Format echoes as JSON for a single file (no echo caps applied)."""
+    data = {
+        "schema_version": 1,
+        "mode": "post-tool-use",
+        "file": file_path,
+        "echoes": [
+            {
+                "check": e.check,
+                "line": e.line,
+                "message": e.message,
+                "suggestion": e.suggestion,
+                "severity": e.severity,
+            }
+            for e in echoes
+        ],
+        "skipped_tools": skipped_tools or [],
+    }
+    return json.dumps(data) + "\n"
+
+
+def format_stop_echoes_json(
+    file_echoes: dict[str, list[Echo]],
+    elapsed: float,
+    skipped_tools: list[str] | None = None,
+    corrections: dict[str, int] | None = None,
+) -> str:
+    """Format stop mode echoes as JSON (no echo caps applied)."""
+    files = {}
+    for path, echoes in file_echoes.items():
+        files[path] = [
+            {
+                "check": e.check,
+                "line": e.line,
+                "message": e.message,
+                "suggestion": e.suggestion,
+                "severity": e.severity,
+            }
+            for e in echoes
+        ]
+    data: dict = {
+        "schema_version": 1,
+        "mode": "stop",
+        "files": files,
+        "elapsed": round(elapsed, 1),
+        "skipped_tools": skipped_tools or [],
+    }
+    if corrections:
+        data["corrections"] = corrections
+    return json.dumps(data) + "\n"
+
+
+def has_errors(echoes: list[Echo]) -> bool:
+    """Return True if any echo has error severity."""
+    return any(e.severity == "error" for e in echoes)
 
 
 def emit(text: str) -> None:

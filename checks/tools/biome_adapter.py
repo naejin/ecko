@@ -21,24 +21,64 @@ RULE_MAP = {
 }
 
 
-def run_biome(file_path: str, plugin_root: str) -> list[Echo]:
+def _find_project_biome_config(start_dir: str) -> str | None:
+    """Walk up from start_dir looking for biome.json or biome.jsonc."""
+    d = os.path.abspath(start_dir)
+    for _ in range(20):  # depth limit
+        for name in ("biome.json", "biome.jsonc"):
+            candidate = os.path.join(d, name)
+            if os.path.isfile(candidate):
+                return candidate
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return None
+
+
+def _to_kebab(name: str) -> str:
+    """Convert camelCase biome rule name to kebab-case ecko check name.
+
+    Examples: noUnusedImports -> no-unused-imports, noVar -> no-var
+    """
+    result: list[str] = []
+    for ch in name:
+        if ch.isupper() and result:
+            result.append("-")
+        result.append(ch.lower())
+    return "".join(result)
+
+
+def run_biome(
+    file_path: str,
+    plugin_root: str,
+    use_project_config: bool = False,
+) -> list[Echo]:
     """Run biome on a file and return echoes."""
     cmd = resolve_node_tool("biome", package="@biomejs/biome")
     if not cmd:
         return []
 
-    config_path = os.path.normpath(os.path.join(plugin_root, "config"))
+    cwd = os.path.dirname(os.path.abspath(file_path))
+    has_project_config = use_project_config and _find_project_biome_config(cwd)
+
+    if use_project_config and not has_project_config:
+        emit(
+            "~~ ecko ~~ note: biome_use_project_config enabled"
+            " but no biome.json/biome.jsonc found — using ecko config\n"
+        )
+
+    if has_project_config:
+        run_cmd = [*cmd, "lint", "--reporter=json", file_path]
+    else:
+        config_path = os.path.normpath(os.path.join(plugin_root, "config"))
+        run_cmd = [
+            *cmd, "lint", "--config-path", config_path, "--reporter=json", file_path,
+        ]
 
     try:
         result = subprocess.run(
-            [
-                *cmd,
-                "lint",
-                "--config-path",
-                config_path,
-                "--reporter=json",
-                file_path,
-            ],
+            run_cmd,
             capture_output=True,
             text=True,
             timeout=30,
@@ -70,7 +110,11 @@ def run_biome(file_path: str, plugin_root: str) -> list[Echo]:
 
         check = RULE_MAP.get(rule_name)
         if not check:
-            continue
+            if use_project_config and rule_name:
+                # Unknown rules get kebab-case name when using project config
+                check = _to_kebab(rule_name)
+            else:
+                continue
 
         message = diag.get("description", "") or diag.get("message", "")
         # Extract line number from location
@@ -90,6 +134,8 @@ def run_biome(file_path: str, plugin_root: str) -> list[Echo]:
             elif isinstance(span, dict):
                 line = span.get("start", {}).get("line", 0)
 
-        echoes.append(Echo(check=check, line=line, message=str(message)))
+        diag_severity = diag.get("severity", "warning")
+        severity = "error" if diag_severity == "error" else "warn"
+        echoes.append(Echo(check=check, line=line, message=str(message), severity=severity))
 
     return echoes

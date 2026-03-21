@@ -1,5 +1,99 @@
 # Changelog
 
+## v1.3.0
+
+Intelligence — project fingerprinting and dry-run introspection.
+
+### New features
+
+- **Project fingerprinting** (`checks/fingerprint.py`) — detects frameworks from marker files
+  (requirements.txt, pyproject.toml, package.json). Feeds vulture adapter with framework-specific
+  skip lists to reduce false positives (FastAPI DI params, Flask globals, Django metaclass attrs).
+  No auto-configuration — conservative scope.
+- **`_FRAMEWORK_VULTURE_SKIPS`** in vulture adapter — FastAPI (`db`, `session`, `request`,
+  `response`, `Depends`), Flask (`app`, `g`, `request`, `session`), Django (`request`, `queryset`,
+  `Meta`, `verbose_name`). Applied automatically when framework detected.
+- **`--mode dry-run`** — lists which checks would run for a given file without executing any tools.
+  Shows language detection, tool availability (found/not found), disabled checks. Always returns 0.
+
+### Tests
+
+- 568 total (up from 548). New: fingerprint (11), dry-run (7), format updates (2).
+
+## v1.2.0
+
+Go + Rust — Layer 3 deep analysis for Go and Rust projects.
+
+### New features
+
+- **Go support via golangci-lint** — `checks/tools/golangci_adapter.py`. Runs `golangci-lint run
+  --out-format json ./...`. Check names: `go-{linter}` (e.g., `go-errcheck`, `go-staticcheck`).
+  Post-filters to modified files. Timeout: 120s. Tool resolution: `shutil.which` (Go binary).
+- **Rust support via clippy** — `checks/tools/clippy_adapter.py`. Runs `cargo clippy
+  --message-format=json`. Streaming JSON parsing (one object per line). Check names: `rust-{code}`
+  (e.g., `rust-clippy::needless_return`). Gated on `Cargo.toml`. Timeout: 120s.
+- `.go` and `.rs` added to `LANG_MAP` for language detection.
+- `golangci-lint` and `clippy` added to `_INSTALL_HINTS`.
+- Both dispatched in Layer 3 thread pool (stop mode only).
+
+### Tests
+
+- 548 total (up from 526). New: golangci adapter (12), clippy adapter (10).
+
+## v1.1.0
+
+Severity + Machine Output — echo severity levels and structured JSON output for tooling.
+
+### New features
+
+- **Severity on Echo** — `severity` field on the Echo dataclass. Default `"warn"`. Error-severity
+  echoes get `[error]` prefix in text output. Internal defaults only:
+  - `"error"`: bare-except (E722), star-imports (F403), unreachable-code, type-error (pyright),
+    biome error-category diagnostics
+  - `"warn"`: everything else
+- **`output_format` config key** — set to `"json"` for machine-readable JSON output on stderr.
+  Schema version 1. No echo caps applied in JSON mode (machine consumers need complete data).
+  Exit codes unchanged regardless of format.
+- **`has_errors()` helper** — `has_errors(echoes)` returns `True` if any echo has error severity.
+
+### Eliminated
+
+- **`ruff_disabled_rules`** — `disabled_checks` already handles suppression via ecko check names.
+  Documented the interaction in `ecko.yaml.example`.
+
+### Tests
+
+- 526 total (up from 488). New: severity (16), JSON output (22).
+
+## v1.0.0
+
+Project Config — bring your own ruff and biome configurations into ecko's detect-echo-correct loop.
+
+### New features
+
+- **`ruff_use_project_config`** — boolean config key. When `true`, ruff defers to your project's
+  `ruff.toml` / `pyproject.toml [tool.ruff]` instead of ecko's built-in rule selection. `--no-fix`
+  is always enforced (safety invariant — project `fix = true` would create infinite hook loop).
+  Echoes are still filtered by `disabled_checks` using ecko check names.
+- **`biome_use_project_config`** — boolean config key. When `true`, biome defers to your project's
+  `biome.json` / `biome.jsonc` instead of ecko's bundled config. Unknown biome rules are auto-mapped
+  to kebab-case ecko check names via `_to_kebab()` (e.g., `noDoubleEquals` → `no-double-equals`)
+  and can be disabled via `disabled_checks`. Falls back to ecko's config with a note if no project
+  config is found.
+- **Session stats in stop output** — after the self-correction summary, a one-line session summary:
+  `~~ ecko ~~ session: 47 echoes across 8 files, 12 self-corrected`
+- **`/ecko:session` command** — slash command that reads the session ledger and presents a structured
+  summary: files touched, total echoes, top 5 checks, self-correction count, clean-first-pass rate.
+- **Runner section comments** — `# --- Filtering ---`, `# --- Tool availability ---`,
+  `# --- Layer 2 dispatch ---`, `# --- Layer 3 dispatch ---` for navigability. No extraction.
+
+### Internal
+
+- `checks/session_stats.py` — standalone script for `/ecko:session` command
+- `commands/session.md` — slash command definition
+- 488 total tests (up from 448). New: ruff project config (12), biome project config (19),
+  session stats (5+4), adapter behavior change (2).
+
 ## v0.9.1
 
 Noise reduction — two false positive patterns eliminated at the source.

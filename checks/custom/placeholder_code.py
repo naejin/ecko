@@ -90,6 +90,9 @@ def _check_function(
         return None
     if is_protocol:
         return None
+    # Dunder methods often have intentionally empty bodies (protocol stubs)
+    if func.name.startswith("__") and func.name.endswith("__"):
+        return None
 
     placeholder_kind = _is_placeholder_body(func.body)
     if placeholder_kind is None:

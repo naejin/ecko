@@ -29,32 +29,54 @@ RULE_MAP = {
 # ruff_extra_rules: [S110]
 
 
+# Codes that get error severity (safety-critical)
+_ERROR_CODES = frozenset({"E722", "F403"})
+
 # Ruff A001/A002 message format: Variable `type` is shadowing a Python builtin
 _SHADOW_NAME_RE = re.compile(r"`(\w+)` is shadowing")
+
+
+_extra_rules_warned = False
 
 
 def run_ruff(
     file_path: str,
     builtin_shadow_allowlist: frozenset[str] | None = None,
     extra_rules: list[str] | None = None,
+    use_project_config: bool = False,
 ) -> list[Echo]:
     """Run ruff on a file and return echoes."""
+    global _extra_rules_warned
+
     cmd = resolve_python_tool("ruff")
     if not cmd:
         return []
 
+    if use_project_config:
+        # Defer to project's ruff.toml / pyproject.toml [tool.ruff].
+        # Always pass --no-fix (safety: project fix=true would create infinite loop).
+        if extra_rules and not _extra_rules_warned:
+            _extra_rules_warned = True
+            emit(
+                "~~ ecko ~~ note: ruff_extra_rules ignored when"
+                " ruff_use_project_config is enabled\n"
+            )
+        run_cmd = [*cmd, "check", "--output-format", "json", "--no-fix", file_path]
+    else:
+        run_cmd = [
+            *cmd,
+            "check",
+            "--select",
+            RUFF_RULES + ("," + ",".join(extra_rules) if extra_rules else ""),
+            "--output-format",
+            "json",
+            "--no-fix",
+            file_path,
+        ]
+
     try:
         result = subprocess.run(
-            [
-                *cmd,
-                "check",
-                "--select",
-                RUFF_RULES + ("," + ",".join(extra_rules) if extra_rules else ""),
-                "--output-format",
-                "json",
-                "--no-fix",
-                file_path,
-            ],
+            run_cmd,
             capture_output=True,
             text=True,
             timeout=30,
@@ -83,12 +105,18 @@ def run_ruff(
         line = v.get("location", {}).get("row", 0)
         message = v.get("message", "")
 
-        # Filter builtin-shadowing by allowlist
-        if check == "builtin-shadowing" and builtin_shadow_allowlist is not None:
+        # Filter builtin-shadowing by allowlist + dunder skip
+        if check == "builtin-shadowing":
             m = _SHADOW_NAME_RE.search(message)
-            if m and m.group(1) in builtin_shadow_allowlist:
-                continue
+            if m:
+                name = m.group(1)
+                # Dunder-prefixed params are intentional API design, not accidental
+                if name.startswith("__") and name.endswith("__"):
+                    continue
+                if builtin_shadow_allowlist is not None and name in builtin_shadow_allowlist:
+                    continue
 
-        echoes.append(Echo(check=check, line=line, message=message))
+        severity = "error" if code in _ERROR_CODES else "warn"
+        echoes.append(Echo(check=check, line=line, message=message, severity=severity))
 
     return echoes

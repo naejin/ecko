@@ -54,7 +54,7 @@ def run_pyright(files: list[str], cwd: str) -> dict[str, list[Echo]]:
         # pyright uses 0-indexed lines
         line += 1
         file_echoes.setdefault(path, []).append(
-            Echo(check="type-error", line=line, message=message)
+            Echo(check="type-error", line=line, message=message, severity="error")
         )
 
     return file_echoes

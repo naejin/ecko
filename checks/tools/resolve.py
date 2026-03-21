@@ -5,6 +5,13 @@ from __future__ import annotations
 import shutil
 
 
+def resolve_binary_tool(binary: str) -> list[str] | None:
+    """Resolve a system binary (Go, Rust, etc.). PATH only, no fallback."""
+    if shutil.which(binary):
+        return [binary]
+    return None
+
+
 def resolve_python_tool(binary: str, package: str = "") -> list[str] | None:
     """Resolve a Python tool. Checks PATH → uvx → pipx run."""
     if shutil.which(binary):
