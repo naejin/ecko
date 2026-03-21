@@ -125,8 +125,10 @@ class TestClippyAdapter:
             },
         ])
         mock_run.return_value = MagicMock(stdout=output, returncode=0)
+        import os
+        cwd = os.path.normpath("/tmp/project")
         result = run_clippy(
-            "/tmp/project", modified_files=["/tmp/project/src/main.rs"]
+            cwd, modified_files=[os.path.normpath(os.path.join(cwd, "src/main.rs"))]
         )
         assert len(result) == 1
 

@@ -131,8 +131,10 @@ class TestGolangciAdapter:
             }),
             returncode=1,
         )
+        import os
+        cwd = os.path.normpath("/tmp/project")
         result = run_golangci(
-            "/tmp/project", modified_files=["/tmp/project/main.go"]
+            cwd, modified_files=[os.path.join(cwd, "main.go")]
         )
         # Only main.go should be in results
         assert len(result) == 1
