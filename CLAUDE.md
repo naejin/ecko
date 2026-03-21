@@ -44,6 +44,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `.pyi` type stubs are skipped from all linting (they exist for type checkers, not runtime)
 - `.test-d.ts` tsd assertion files are skipped via `_is_skippable_stub()` in runner.py — same skip as `.pyi`
 - All adapters use `emit()` from `result.py` for stderr output — never `sys.stderr.write` directly
+- All output formatting functions live in `result.py` — data/persistence modules (`ledger.py`, `fileutil.py`, `regex_utils.py`) must never format output for stderr
 - Pyright is a Python tool: use `resolve_python_tool("pyright")`, NOT `resolve_node_tool` (despite npm availability)
 - Layer 2 checks live in `_run_layer2_checks()` — add new checks there, not in `run_post_tool_use()` or `run_stop()` separately
 - JS/TS import extraction (`_extract_js_imports`) skips commented-out imports via `_is_in_js_comment()` heuristic
@@ -166,7 +167,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Shell hooks use `printf` not `echo` for cross-platform consistency
 
 ## Session ledger (v0.8.0)
-- `.ecko-session/ledger.jsonl` — append-only JSONL, pruned to rolling session window on each write
+- `.ecko-session/ledger.jsonl` — true append-only (`open("a")`), never read-modify-write. Stale entries filtered at read time by `_read_raw`'s cutoff
 - Session boundary: 4h default (matches `--since=4h`), configurable via `session_hours`
 - Schema: `{"ts": float, "file": "rel/path", "mode": "post-tool-use"|"stop", "echoes": {"check": count}}`
 - Clean files recorded as `{"echoes": {}}` — enables future first-pass-clean rate
@@ -177,6 +178,8 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - All ledger I/O is try/except guarded — failure never blocks or crashes hooks
 - `.ecko-session/` is in `_DEFAULT_EXCLUDE_DIRS` — never linted
 - Config keys: `session_hours` (flat, default 4), `echo_cap_cross_file` (flat, default 0)
+- `format_correction_summary()` lives in `result.py` — all output formatting goes through `result.py`, not data modules
+- When `cross_file_cap` is active, `format_stop_echoes` header includes "(display capped at N per check)" so total count doesn't mislead
 
 ## Current version and next milestone
 - Current: v0.8.0 (session memory)
