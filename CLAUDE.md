@@ -28,6 +28,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Tools auto-resolve via `checks/tools/resolve.py`: PATH first → `uvx`/`pipx run` (Python) → `npx`/`pnpx` (Node)
 - When binary != package (e.g. `tsc` from `typescript`), use `resolve_node_tool("tsc", package="typescript")`
 - `checks/debug.py` is a pure utility (imports only `os` + `sys`) — module-level `_DEBUG` flag from `ECKO_DEBUG` env var, single `debug()` function
+- `checks/debug.py` uses `sys.stderr.write` directly (not `emit()`) — importing result.py would add a dependency to what must be importable from anywhere
 - Hook output goes to stderr (`result.emit()`) — that's how Claude Code reads it
 - Exit code 1 = echoes found (agent self-corrects), exit code 0 = clean, exit code 2 = block (PreToolUse)
 - Noise filters live in adapters/custom checks, not in runner.py — filter at the source
@@ -82,6 +83,9 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Shell hooks: use `printf '%s' "$VAR"` not `echo "$VAR"` — echo handles escape sequences inconsistently across platforms
 - Shell hooks: always include `set -euo pipefail` for consistency, even in trivial scripts
 - Integration tests that assert on clean output (`output == ""`) must tolerate tool warnings — on Windows, tools may resolve via npx but fail with WinError 2
+- `_get_modified_files` includes recently committed files — tests asserting `output == ""` after commit must account for clean-sweep message
+- Debug mode smoke test: `ECKO_DEBUG=1 python3 checks/runner.py --file <path> --mode post-tool-use --cwd <dir> --plugin-root .`
+- Stop mode with explicit files: `python3 checks/runner.py --file x --mode stop --cwd <dir> --plugin-root . --files file1.py,file2.py`
 
 ## Code style
 - All modules use `from __future__ import annotations`
@@ -97,6 +101,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Custom check: add `checks/custom/<name>.py`, wire into `_run_layer2_checks()` in runner.py
 - Register the check name in `ecko.yaml.example` disabled_checks comment
 - For AST-based checks on test functions: use `_iter_test_functions()` + `_walk_shallow()` to avoid nested function/class false positives
+- For AST-based checks on any functions: use `ast.iter_child_nodes(tree)` for module-level + `ast.iter_child_nodes(cls)` for class-level — never `ast.walk(tree)` which visits nested functions and corrupts parent tracking
 - Guard clause filters (in `_is_guard_clause`): skip `self.skipTest`, `pytest.skip/fail`, `raise pytest.skip`, early return, platform guards (`os.name`, `sys.version_info`, `sys.platform`)
 - Regex patterns in bash guard: avoid `$` anchors (bypassed by trailing args), use `(\s|$|;|&|\|)` terminators instead
 - Bash guard `--force` pattern: must match both `--force` and `-f`; use command-wide `(?!.*--force-with-lease)` lookahead, not position-specific `(?!-with-lease)`
@@ -131,6 +136,8 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Update commands table in README.md if adding/removing commands
 - Update `docs/ideas/ideas-done.md` and `ideas-todo.md`
 - CHANGELOG test count must match actual `pytest` output (currently 347)
+- Update test count in both CHANGELOG.md AND CLAUDE.md after final stabilization, not after initial implementation (review rounds add tests)
+- Update README.md checks tables when adding new checks
 
 ## Transparency (v0.6.0)
 - Tool adapter failure reporting: all adapters catch `TimeoutExpired` vs `OSError` separately, emit `~~ ecko ~~ warning: {tool} timed out/failed` to stderr
