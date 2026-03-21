@@ -25,6 +25,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Config warnings deduplicated per cwd via `_config_warned` set in runner.py
 - Zero Python dependencies — config.py has a minimal YAML subset parser (no PyYAML)
 - YAML parser `_parse_list_block` supports nested lists via `last_empty_key` tracking — highest-risk code path, add regression tests for any changes (test all config sections parse correctly after edits)
+- YAML subset parser only supports one level of nesting — new config keys must be flat (e.g., `ruff_extra_rules`, not `ruff: extra_rules:`)
 - Tools auto-resolve via `checks/tools/resolve.py`: PATH first → `uvx`/`pipx run` (Python) → `npx`/`pnpx` (Node)
 - When binary != package (e.g. `tsc` from `typescript`), use `resolve_node_tool("tsc", package="typescript")`
 - `checks/debug.py` is a pure utility (imports only `os` + `sys`) — module-level `_DEBUG` flag from `ECKO_DEBUG` env var, single `debug()` function
@@ -106,6 +107,8 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - For AST-based checks on any functions: use `ast.iter_child_nodes(tree)` for module-level + `ast.iter_child_nodes(cls)` for class-level — never `ast.walk(tree)` which visits nested functions and corrupts parent tracking
 - Guard clause filters (in `_is_guard_clause`): skip `self.skipTest`, `pytest.skip/fail`, `raise pytest.skip`, early return, platform guards (`os.name`, `sys.version_info`, `sys.platform`)
 - `test-conditional` skips `if` inside `for`/`while`/`async for` loops when the `if` body contains no assertions — data-filtering pattern, not test branching. Loop-with-assert still flagged.
+- `_if_body_has_assert()` in test_quality.py uses shallow BFS (same pattern as `_walk_shallow`), NOT `ast.walk()` — avoids false positives from asserts inside nested function defs
+- `_LOOP_TYPES` and other check-specific constants are module-level, not function-local (consistency with `_CONSTANT_GUARD_NAMES`, `_SLEEP_NAMES`, etc.)
 - Regex patterns in bash guard: avoid `$` anchors (bypassed by trailing args), use `(\s|$|;|&|\|)` terminators instead
 - Bash guard `--force` pattern: must match both `--force` and `-f`; use command-wide `(?!.*--force-with-lease)` lookahead, not position-specific `(?!-with-lease)`
 - ReDoS test inputs: `"a" * 25 + "!"` triggers catastrophic backtracking for `(a+)+b`; `"a" * N + "c"` does NOT (engine fails fast). Always add wall-clock assertion with `time.monotonic()`
@@ -195,6 +198,8 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `get_modified_files()` uses `session_hours` config (not hardcoded 4h) — format: `--since={minutes}m`
 - Ledger pruning: `_maybe_prune()` called from `read_session()`, dual-condition (>50% stale AND >50KB), atomic via `os.replace()`
 - Per-tool timing: debug-mode only, `layer3: {tool} completed in {N}s`
+- `get_modified_files()` uses minutes format (`--since={N}m`) for sub-hour `session_hours` precision
+- Swarm reports for version planning live in `swarm/` — future versions should reference prior swarm deferred-item tables
 
 ## Current version and next milestone
 - Current: v0.9.1 (noise reduction)
