@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.7.0
+
+Observability — ecko always tells you what it did.
+
+### Bug fixes
+
+- **`_get_modified_files` blind spot** — files committed during a session were invisible to the
+  stop hook. Now also checks recently committed files via `git log --since=4h`.
+- **`echo` → `printf` in exit_plan_mode.sh** — cross-platform escape sequence consistency.
+
+### New features
+
+- **Debug mode** (`ECKO_DEBUG=1`) — emits tool resolution, file detection, config loading, and
+  timing to stderr. Off by default.
+- **Clean-sweep message** — stop hook now emits `~~ ecko ~~ clean sweep — 0 echoes across N files`
+  when all checks pass, instead of silent nothing.
+- **Stop-mode timing** — stop hook reports total elapsed time.
+- **`--files` argument** for stop mode — explicit file list, bypasses git detection.
+
+### New check
+
+- **`placeholder-code`** — flags Python functions whose body is only `pass`, `...`, or
+  `raise NotImplementedError` (excluding abstract methods, protocols, overloads, type stubs,
+  test files). JS/TS: flags `throw new Error("Not implemented")`.
+
+### Tests
+
+- 347 total (up from 314). New: debug mode, placeholder detection, `_get_modified_files` fix,
+  clean-sweep, `--files` argument, debug integration, nested function exclusion, block comment handling.
+
 ## v0.6.1
 
 Tech debt reduction plus reverb/tune UX fixes.

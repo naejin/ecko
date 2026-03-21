@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import re
 import shutil
 import subprocess
 import sys
@@ -137,19 +139,22 @@ def _init_git_repo(path: Path) -> None:
     )
 
 
-def run_ecko_stop(cwd: str) -> tuple[int, str]:
+def run_ecko_stop(cwd: str, files: str | None = None) -> tuple[int, str]:
     """Run ecko in stop mode.  Returns (exit_code, stderr)."""
+    cmd = [
+        sys.executable,
+        RUNNER,
+        "--mode",
+        "stop",
+        "--cwd",
+        cwd,
+        "--plugin-root",
+        PLUGIN_ROOT,
+    ]
+    if files is not None:
+        cmd.extend(["--files", files])
     result = subprocess.run(
-        [
-            sys.executable,
-            RUNNER,
-            "--mode",
-            "stop",
-            "--cwd",
-            cwd,
-            "--plugin-root",
-            PLUGIN_ROOT,
-        ],
+        cmd,
         capture_output=True,
         text=True,
         timeout=120,
@@ -178,7 +183,11 @@ class TestStopMode:
         assert "unused-imports" in output
 
     def test_clean_repo_no_issues(self, tmp_path):
-        """Stop mode on a repo with no uncommitted changes should exit 0."""
+        """Stop mode on a repo with no uncommitted changes should exit 0.
+
+        Recently committed files are now detected via git log --since=4h,
+        so we get a clean sweep message rather than empty output.
+        """
         _init_git_repo(tmp_path)
         clean = tmp_path / "app.py"
         clean.write_text("def hello():\n    return 'hello'\n")
@@ -190,7 +199,8 @@ class TestStopMode:
 
         code, output = run_ecko_stop(str(tmp_path))
         assert code == 0
-        assert output == ""
+        # Recently committed files are detected — clean sweep emitted
+        assert "clean sweep" in output or output == ""
 
     @pytest.mark.skipif(not has_uvx, reason="uvx not available")
     def test_no_duplicate_paths(self, tmp_path):
@@ -377,3 +387,129 @@ class TestAutofix:
             )
             # Should not crash — exit 0 or 1, but no exit 2 / traceback
             assert result.returncode in (0, 1)
+
+
+class TestFilesArgument:
+    """Tests for the --files CLI argument in stop mode."""
+
+    @pytest.mark.skipif(not has_uvx, reason="uvx not available")
+    def test_files_argument_detects_issues(self, tmp_path):
+        """--files should check the specified files directly."""
+        _init_git_repo(tmp_path)
+        f = tmp_path / "bad.py"
+        f.write_text("import os\nimport sys\n")
+        subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "init"],
+            cwd=tmp_path, capture_output=True,
+        )
+        code, output = run_ecko_stop(str(tmp_path), files="bad.py")
+        assert code == 1
+        assert "unused-imports" in output
+
+    def test_files_argument_clean_file(self, tmp_path):
+        """--files with a clean file should produce clean sweep."""
+        _init_git_repo(tmp_path)
+        f = tmp_path / "clean.py"
+        f.write_text("def hello():\n    return 'hello'\n")
+        subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "init"],
+            cwd=tmp_path, capture_output=True,
+        )
+        code, output = run_ecko_stop(str(tmp_path), files="clean.py")
+        assert code == 0
+        assert "clean sweep" in output
+
+    def test_files_argument_overrides_git(self, tmp_path):
+        """--files should override git detection — only specified files checked."""
+        _init_git_repo(tmp_path)
+        dirty = tmp_path / "dirty.py"
+        dirty.write_text("def hello():\n    return 'hello'\n")
+        clean = tmp_path / "clean.py"
+        clean.write_text("def hello():\n    return 'hello'\n")
+        subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "init"],
+            cwd=tmp_path, capture_output=True,
+        )
+        # Modify dirty.py — but only check clean.py via --files
+        dirty.write_text("import os\nimport sys\n")
+        code, output = run_ecko_stop(str(tmp_path), files="clean.py")
+        assert code == 0
+        assert "clean sweep" in output
+
+
+class TestCleanSweep:
+    """Tests for clean-sweep message and stop-mode timing."""
+
+    def test_clean_sweep_message_format(self, tmp_path):
+        """Clean stop should emit the clean sweep message with file count and timing."""
+        _init_git_repo(tmp_path)
+        f = tmp_path / "app.py"
+        f.write_text("def hello():\n    return 'hello'\n")
+        # Leave file as untracked so stop mode picks it up
+        code, output = run_ecko_stop(str(tmp_path))
+        assert code == 0
+        assert "clean sweep" in output
+        assert "0 echoes" in output
+        assert "1 file" in output
+        assert re.search(r"\(\d+\.\d+s\)", output)  # timing like "(0.1s)"
+
+    def test_clean_sweep_multiple_files(self, tmp_path):
+        """Clean sweep should report correct file count for multiple files."""
+        _init_git_repo(tmp_path)
+        (tmp_path / "a.py").write_text("x = 1\n")
+        (tmp_path / "b.py").write_text("y = 2\n")
+        code, output = run_ecko_stop(str(tmp_path))
+        assert code == 0
+        assert "clean sweep" in output
+        assert "2 files" in output
+
+    @pytest.mark.skipif(not has_uvx, reason="uvx not available")
+    def test_finished_timing_on_echoes(self, tmp_path):
+        """When echoes are found, should emit 'finished in' with timing."""
+        _init_git_repo(tmp_path)
+        f = tmp_path / "bad.py"
+        f.write_text("import os\nimport sys\n")
+        code, output = run_ecko_stop(str(tmp_path))
+        assert code == 1
+        assert "finished in" in output
+        assert "s\n" in output  # ends with timing
+
+
+class TestDebugModeIntegration:
+    """Integration tests for ECKO_DEBUG=1."""
+
+    def test_debug_output_when_enabled(self, tmp_path):
+        """ECKO_DEBUG=1 should emit debug lines to stderr."""
+        _init_git_repo(tmp_path)
+        f = tmp_path / "app.py"
+        f.write_text("x = 1\n")
+        env = os.environ.copy()
+        env["ECKO_DEBUG"] = "1"
+        result = subprocess.run(
+            [
+                sys.executable,
+                RUNNER,
+                "--file",
+                str(f),
+                "--mode",
+                "post-tool-use",
+                "--cwd",
+                str(tmp_path),
+                "--plugin-root",
+                PLUGIN_ROOT,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=env,
+        )
+        assert "~~ ecko ~~ debug:" in result.stderr
+        assert "mode=post-tool-use" in result.stderr
+
+    def test_no_debug_output_by_default(self):
+        """Without ECKO_DEBUG, no debug lines should appear."""
+        code, output = run_ecko("clean.py")
+        assert "~~ ecko ~~ debug:" not in output

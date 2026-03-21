@@ -92,5 +92,6 @@ reverb:
 #   unreachable-code, debugger-statements, var-declarations, duplicate-keys,
 #   useless-catch, unicode-artifact, banned-pattern, obsolete-term,
 #   type-error, dead-code, unused-file, unused-export,
-#   test-conditional, fixed-wait, mock-spec-bypass, import-layer
+#   test-conditional, fixed-wait, mock-spec-bypass, import-layer,
+#   placeholder-code
 disabled_checks: []

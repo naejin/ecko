@@ -8,7 +8,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `.claude-plugin/plugin.json` — plugin manifest
 - `hooks/hooks.json` — PreToolUse(Bash, ExitPlanMode) + PostToolUse(Write|Edit) + Stop hook wiring
 - `hooks/*.sh` — shell entry points that delegate to `checks/runner.py`
-- `checks/` — Python package: runner, config, result, formatter, regex_utils, fileutil, tools/, custom/
+- `checks/` — Python package: runner, config, result, formatter, regex_utils, fileutil, debug, tools/, custom/
 - `commands/` — slash commands (ping, status, setup, tune, reverb)
 - `config/biome.json` — biome lint config (only ecko's rules enabled)
 - `scripts/` — install scripts (bash + powershell)
@@ -27,6 +27,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - YAML parser `_parse_list_block` supports nested lists via `last_empty_key` tracking — highest-risk code path, add regression tests for any changes (test all config sections parse correctly after edits)
 - Tools auto-resolve via `checks/tools/resolve.py`: PATH first → `uvx`/`pipx run` (Python) → `npx`/`pnpx` (Node)
 - When binary != package (e.g. `tsc` from `typescript`), use `resolve_node_tool("tsc", package="typescript")`
+- `checks/debug.py` is a pure utility (imports only `os` + `sys`) — module-level `_DEBUG` flag from `ECKO_DEBUG` env var, single `debug()` function
 - Hook output goes to stderr (`result.emit()`) — that's how Claude Code reads it
 - Exit code 1 = echoes found (agent self-corrects), exit code 0 = clean, exit code 2 = block (PreToolUse)
 - Noise filters live in adapters/custom checks, not in runner.py — filter at the source
@@ -129,7 +130,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Update `commands/` listing in Structure section of CLAUDE.md if adding/removing commands
 - Update commands table in README.md if adding/removing commands
 - Update `docs/ideas/ideas-done.md` and `ideas-todo.md`
-- CHANGELOG test count must match actual `pytest` output (currently 314)
+- CHANGELOG test count must match actual `pytest` output (currently 347)
 
 ## Transparency (v0.6.0)
 - Tool adapter failure reporting: all adapters catch `TimeoutExpired` vs `OSError` separately, emit `~~ ecko ~~ warning: {tool} timed out/failed` to stderr
@@ -148,9 +149,18 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `/ecko:tune`: reads all `.ecko-reverb/*.md`, deduplicates, presents numbered interactive list, applies user selection to `ecko.yaml`, deletes ALL read reverb notes (even on "none")
 - `.ecko-reverb/` is in `_DEFAULT_EXCLUDE_DIRS` — reverb notes are never linted
 
+## Observability (v0.7.0)
+- Debug mode: `ECKO_DEBUG=1` env var emits tool resolution, file detection, config, and timing to stderr via `checks/debug.py`
+- `_get_modified_files` now includes recently committed files via `git log --since=4h --diff-filter=ACMR`
+- `--files` CLI argument for stop mode overrides git detection (comma-separated file list)
+- Clean-sweep message: `~~ ecko ~~ clean sweep — 0 echoes across N files (Xs)` when stop finds no issues
+- Stop-mode timing: `~~ ecko ~~ finished in Xs` when echoes found
+- `placeholder-code` check: flags Python `pass`/`...`/`raise NotImplementedError` sole-body functions (skips abstractmethod, overload, Protocol, test files, .pyi) and JS/TS `throw new Error("not implemented")`
+- Shell hooks use `printf` not `echo` for cross-platform consistency
+
 ## Current version and next milestone
-- Current: v0.6.1 (tech debt + reverb/tune UX)
-- Previous: v0.6.0 (transparency + trust)
+- Current: v0.7.0 (observability)
+- Previous: v0.6.1 (tech debt + reverb/tune UX)
 
 ## Not part of the plugin
 - `docs/ideas/` — internal ideation (gitignored)

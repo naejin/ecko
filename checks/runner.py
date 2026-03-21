@@ -7,6 +7,7 @@ import argparse
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 # Ensure the checks package is importable
@@ -28,6 +29,8 @@ from checks.config import (
     load_config,
     validate_config,
 )
+from checks.debug import debug
+from checks.fileutil import is_test_file
 from checks.regex_utils import safe_regex_compile, safe_regex_search
 from checks.result import Echo, emit, format_file_echoes, format_stop_echoes
 
@@ -63,9 +66,6 @@ LANG_MAP = {
 def detect_language(file_path: str) -> str:
     ext = Path(file_path).suffix.lower()
     return LANG_MAP.get(ext, "unknown")
-
-
-from checks.fileutil import is_test_file
 
 
 def _is_skippable_stub(file_path: str) -> bool:
@@ -209,6 +209,7 @@ def _run_layer2_checks(
     """
     echoes: list[Echo] = []
     skipped: list[str] = []
+    debug(f"layer2: ruff={ruff_available} biome={biome_available}")
 
     # Tool checks
     if lang == "python":
@@ -240,6 +241,16 @@ def _run_layer2_checks(
             from checks.custom.test_quality import check_test_quality
 
             echoes.extend(check_test_quality(file_path))
+        else:
+            from checks.custom.placeholder_code import check_placeholder_code
+
+            echoes.extend(check_placeholder_code(file_path))
+
+    # Custom checks (JS/TS placeholder)
+    if lang in ("typescript", "javascript") and not is_test_file(file_path):
+        from checks.custom.placeholder_code import check_placeholder_code_js
+
+        echoes.extend(check_placeholder_code_js(file_path))
 
     # Custom checks (universal)
     from checks.custom.unicode_artifacts import check_unicode_artifacts
@@ -264,6 +275,7 @@ def _run_layer2_checks(
 
         echoes.extend(check_import_layers(file_path, import_rules, cwd))
 
+    debug(f"layer2: {len(echoes)} echoes for {os.path.basename(file_path)}")
     return echoes, skipped
 
 
@@ -277,6 +289,7 @@ def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
         return 0
 
     config = load_config(cwd)
+    debug(f"config loaded: {len(config)} keys")
     _emit_config_warnings(config, cwd)
 
     if is_excluded(file_path, cwd, get_exclude_patterns(config)):
@@ -286,6 +299,7 @@ def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
     shadow_allowlist = get_builtin_shadow_allowlist(config)
     echo_cap = get_echo_cap(config)
     lang = detect_language(file_path)
+    debug(f"lang={lang} for {os.path.basename(file_path)}")
 
     # --- Layer 1: Auto-fix (silent) ---
     from checks.formatter import autofix
@@ -332,9 +346,11 @@ def _normalize_path(path: str, cwd: str) -> str:
     return os.path.normpath(os.path.join(cwd, path))
 
 
-def run_stop(cwd: str, plugin_root: str) -> int:
+def run_stop(cwd: str, plugin_root: str, files_override: list[str] | None = None) -> int:
     """Run Layer 3 (deep analysis) + Layer 2 re-sweep on all modified files."""
+    t0 = time.monotonic()
     config = load_config(cwd)
+    debug(f"stop: config loaded: {len(config)} keys")
     _emit_config_warnings(config, cwd)
 
     disabled = get_disabled_checks(config)
@@ -344,8 +360,12 @@ def run_stop(cwd: str, plugin_root: str) -> int:
     import_rules = get_import_rules(config)
 
     # Find modified files, filtering excluded paths
+    if files_override is not None:
+        raw_files = [_normalize_path(f, cwd) for f in files_override]
+    else:
+        raw_files = _get_modified_files(cwd)
     modified = [
-        f for f in _get_modified_files(cwd) if not is_excluded(f, cwd, user_excludes)
+        f for f in raw_files if not is_excluded(f, cwd, user_excludes)
     ]
     if not modified:
         return 0
@@ -354,6 +374,7 @@ def run_stop(cwd: str, plugin_root: str) -> int:
     ts_files = [
         f for f in modified if detect_language(f) in ("typescript", "javascript")
     ]
+    debug(f"stop: {len(modified)} modified ({len(py_files)} py, {len(ts_files)} ts/js)")
 
     all_echoes: dict[str, list[Echo]] = {}
     skipped: list[str] = []
@@ -414,6 +435,7 @@ def run_stop(cwd: str, plugin_root: str) -> int:
             else:
                 futures[pool.submit(_run_knip)] = "knip"
 
+        debug(f"layer3: dispatched {list(futures.values())}")
         for future in as_completed(futures):
             tool_name = futures[future]
             try:
@@ -489,12 +511,20 @@ def run_stop(cwd: str, plugin_root: str) -> int:
 
     _emit_skipped_tools(skipped)
 
+    elapsed = time.monotonic() - t0
+
     if not all_echoes:
+        emit(
+            f"~~ ecko ~~ clean sweep — 0 echoes across"
+            f" {len(modified)} file{'s' if len(modified) != 1 else ''}"
+            f" ({elapsed:.1f}s)\n"
+        )
         return 0
 
     emit(format_stop_echoes(all_echoes, echo_cap=echo_cap))
+    emit(f"~~ ecko ~~ finished in {elapsed:.1f}s\n")
     if is_reverb_enabled(config):
-        emit("\n~~ ecko ~~ tip: run /ecko:reverb to capture what went wrong\n")
+        emit("~~ ecko ~~ tip: run /ecko:reverb to capture what went wrong\n")
     return 1
 
 
@@ -611,6 +641,22 @@ def _get_modified_files(cwd: str) -> list[str]:
             for line in result.stdout.strip().splitlines():
                 if line:
                     files.add(os.path.join(cwd, line))
+
+        # Recently committed files (catch files committed during this session)
+        result = subprocess.run(
+            [
+                "git", "log", "--since=4h",
+                "--diff-filter=ACMR", "--name-only", "--pretty=format:",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.strip().splitlines():
+                if line:
+                    files.add(os.path.join(cwd, line))
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
 
@@ -628,17 +674,27 @@ def main() -> None:
     )
     parser.add_argument("--cwd", required=True, help="Project working directory")
     parser.add_argument("--plugin-root", required=True, help="Plugin root directory")
+    parser.add_argument(
+        "--files",
+        help="Comma-separated file list (overrides git detection in stop mode)",
+    )
     args = parser.parse_args()
+    debug(f"mode={args.mode} file={args.file}")
 
     if args.mode == "post-tool-use":
         if not args.file:
             print("--file is required for post-tool-use mode", file=sys.stderr)
             sys.exit(2)
-        sys.exit(run_post_tool_use(args.file, args.cwd, args.plugin_root))
+        exit_code = run_post_tool_use(args.file, args.cwd, args.plugin_root)
     elif args.mode == "stop":
-        sys.exit(run_stop(args.cwd, args.plugin_root))
+        files_override = args.files.split(",") if args.files else None
+        exit_code = run_stop(args.cwd, args.plugin_root, files_override=files_override)
     elif args.mode == "pre-tool-use-bash":
-        sys.exit(run_pre_tool_use_bash(args.cwd))
+        exit_code = run_pre_tool_use_bash(args.cwd)
+    else:
+        exit_code = 0
+    debug(f"exit_code={exit_code}")
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

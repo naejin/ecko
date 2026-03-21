@@ -1,6 +1,6 @@
 # ecko
 
-[![v0.6.1](https://img.shields.io/badge/version-0.6.1-blue)](https://github.com/naejin/ecko/releases/tag/v0.6.1)
+[![v0.7.0](https://img.shields.io/badge/version-0.7.0-blue)](https://github.com/naejin/ecko/releases/tag/v0.7.0)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-plugin-7c3aed)](https://docs.anthropic.com/en/docs/claude-code)
 [![Python](https://img.shields.io/badge/python-3.10+-3776ab?logo=python&logoColor=white)](https://python.org)
 [![TypeScript](https://img.shields.io/badge/typescript-supported-3178c6?logo=typescript&logoColor=white)](https://typescriptlang.org)
@@ -82,7 +82,8 @@ Ecko hooks into four moments in a Claude Code session:
 │  Layer 2: Echoes (per-file)                 │
 │  ruff · biome · duplicate keys ·            │
 │  unreachable code · unicode artifacts ·     │
-│  banned patterns · test quality.            │
+│  placeholder code · banned patterns ·       │
+│  test quality.                              │
 │  Reports to agent.                          │
 └─────────────────────────────────────────────┘
 ```
@@ -148,6 +149,7 @@ Ecko hooks into four moments in a Claude Code session:
 | `banned-pattern` | all | Custom regex patterns from `ecko.yaml` |
 | `obsolete-term` | all | Old names that should be renamed |
 | `import-layer` | py / ts | Import boundary violations from `import_rules` config |
+| `placeholder-code` | py / ts | `pass`/`...`/`raise NotImplementedError` sole-body functions; JS `throw new Error("not implemented")` |
 
 ### Layer 2 — Test Quality (Python test files only)
 
@@ -278,7 +280,7 @@ When tools are unavailable, ecko reports what was skipped with install hints:
 
 ## Troubleshooting
 
-**Ecko runs but reports nothing** — Check if your tools are installed: run `/ecko:status`. If no tools are found and you don't have `uvx`/`npx`, install [uv](https://docs.astral.sh/uv) or [Node.js](https://nodejs.org). Ecko reports skipped tools with install hints (e.g., `ruff not found — try: pip install ruff`). If a tool times out or crashes, ecko emits a warning instead of silently returning nothing.
+**Ecko runs but reports nothing** — On stop, ecko now emits `~~ ecko ~~ clean sweep — 0 echoes across N files` when all checks pass, so you can tell it ran. Check if your tools are installed: run `/ecko:status`. For deeper visibility, set `ECKO_DEBUG=1` to see config loading, tool resolution, file detection, and timing. Ecko reports skipped tools with install hints (e.g., `ruff not found — try: pip install ruff`). If a tool times out or crashes, ecko emits a warning instead of silently returning nothing.
 
 **Config changes aren't taking effect** — Verify your `ecko.yaml` is in the project root (same directory as `.git`). Ecko validates config and warns about unknown keys:
 ```
