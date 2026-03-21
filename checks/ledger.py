@@ -75,13 +75,18 @@ def append(
         pass  # Graceful failure — ledger is best-effort
 
 
+_PRUNE_SIZE_THRESHOLD = 50_000  # 50KB
+
+
 def read_session(
     cwd: str, session_hours: float = _DEFAULT_SESSION_HOURS
 ) -> list[dict[str, Any]]:
     """Read all ledger entries within the current session window."""
     path = _ledger_path(cwd)
     cutoff = time.time() - (session_hours * 3600)
-    return _read_raw(path, cutoff)
+    entries = _read_raw(path, cutoff)
+    _maybe_prune(path, len(entries), cutoff)
+    return entries
 
 
 def compute_self_corrections(entries: list[dict[str, Any]]) -> dict[str, int]:
@@ -139,4 +144,49 @@ def _read_raw(path: str, cutoff: float) -> list[dict[str, Any]]:
         return []
     return entries
 
+
+def _maybe_prune(path: str, active_count: int, cutoff: float) -> None:
+    """Compact ledger when >50% stale and file >50KB. Atomic via os.replace()."""
+    try:
+        file_size = os.path.getsize(path)
+    except OSError:
+        return
+
+    if file_size < _PRUNE_SIZE_THRESHOLD:
+        return
+
+    # Count total lines to compute stale ratio
+    try:
+        with open(path, encoding="utf-8") as f:
+            total = sum(1 for line in f if line.strip())
+    except OSError:
+        return
+
+    if total == 0 or active_count / total >= 0.5:
+        return  # Not enough stale entries to justify rewrite
+
+    # Rewrite with only active entries
+    tmp_path = path + ".tmp"
+    try:
+        active_lines: list[str] = []
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    entry = json.loads(stripped)
+                    if entry.get("ts", 0) >= cutoff:
+                        active_lines.append(stripped + "\n")
+                except json.JSONDecodeError:
+                    continue
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.writelines(active_lines)
+        os.replace(tmp_path, path)
+    except OSError:
+        # Clean up temp file on failure
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
 

@@ -10,7 +10,7 @@ from checks.result import Echo, emit
 from checks.tools.resolve import resolve_python_tool
 
 # Ruff rules we check
-RUFF_RULES = "F401,E711,E712,E722,F403,B006,A001,A002,S110"
+RUFF_RULES = "F401,E711,E712,E722,F403,B006,A001,A002"
 
 # Map ruff rule codes to ecko check names
 RULE_MAP = {
@@ -22,8 +22,11 @@ RULE_MAP = {
     "B006": "mutable-default-args",
     "A001": "builtin-shadowing",
     "A002": "builtin-shadowing",
-    "S110": "empty-error-handlers",
 }
+# Note: S110 (empty-error-handlers / try-except-pass) removed in v0.9.1.
+# E722 (bare-except) already catches the dangerous case. try/except-pass with
+# a named exception is a legitimate guard pattern. Users can re-enable via
+# ruff_extra_rules: [S110]
 
 
 # Ruff A001/A002 message format: Variable `type` is shadowing a Python builtin
@@ -33,6 +36,7 @@ _SHADOW_NAME_RE = re.compile(r"`(\w+)` is shadowing")
 def run_ruff(
     file_path: str,
     builtin_shadow_allowlist: frozenset[str] | None = None,
+    extra_rules: list[str] | None = None,
 ) -> list[Echo]:
     """Run ruff on a file and return echoes."""
     cmd = resolve_python_tool("ruff")
@@ -45,7 +49,7 @@ def run_ruff(
                 *cmd,
                 "check",
                 "--select",
-                RUFF_RULES,
+                RUFF_RULES + ("," + ",".join(extra_rules) if extra_rules else ""),
                 "--output-format",
                 "json",
                 "--no-fix",
@@ -75,7 +79,7 @@ def run_ruff(
     echoes: list[Echo] = []
     for v in violations:
         code = v.get("code", "")
-        check = RULE_MAP.get(code, code.lower())
+        check = RULE_MAP.get(code) or code.lower()
         line = v.get("location", {}).get("row", 0)
         message = v.get("message", "")
 

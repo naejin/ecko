@@ -1,5 +1,56 @@
 # Changelog
 
+## v0.9.1
+
+Noise reduction — two false positive patterns eliminated at the source.
+
+### Noise fixes
+
+- **`empty-error-handlers` (S110) removed from built-in ruff rules** — `try/except Exception: pass`
+  is a legitimate guard pattern (best-effort I/O, optional imports, graceful degradation). E722
+  (`bare-except`) already catches the truly dangerous case. Users who want strict "no try-except-pass"
+  can re-enable via `ruff_extra_rules: [S110]`. Note: re-enabled S110 echoes use check name `s110`
+  (not `empty-error-handlers`), so update `disabled_checks` accordingly.
+- **`test-conditional` no longer flags data-filtering `if` inside loops** — `if line.strip():` inside
+  a `for` loop with no assertions in the body is data filtering, not test branching. `if` inside a
+  loop WITH assertions is still flagged.
+
+### Tests
+
+- 448 total (up from 438). New: S110 removal verification, test-conditional loop filtering
+  (data filter skip, while loop skip, async for skip, loop-with-assert preserved, outside-loop
+  preserved, nested-function-assert edge case), ASYNC prefix validation.
+
+## v0.9.0
+
+Your Rules — bring your lint standards into ecko's detect-echo-correct loop.
+
+### New features
+
+- **Extra ruff rules** (`ruff_extra_rules`) — add any ruff rule code to ecko's checks via
+  `ecko.yaml`. Accepts full codes (`C901`, `N801`) and category prefixes (`UP`, `SIM`).
+  Unmapped codes use their lowercased code as the check name (e.g., `C901` becomes `c901`).
+  Invalid codes are warned and skipped at config load.
+- **Ledger pruning** — `.ecko-session/ledger.jsonl` is automatically compacted when >50%
+  of entries are stale and the file exceeds 50KB. Atomic rewrite via temp file.
+- **Per-tool timing** — Layer 3 tool timing visible in debug mode (`ECKO_DEBUG=1`).
+
+### Bug fixes
+
+- **`_get_modified_files` hardcoded `--since=4h`** — the git log lookback window now
+  respects the `session_hours` config value instead of always using 4 hours.
+
+### Architecture
+
+- **Runner decomposition** — `checks/bash_guard.py` (~80 lines) and `checks/git.py`
+  (~55 lines) extracted from `runner.py`. Runner drops from 737 to ~600 lines. All
+  existing imports continue to work via re-exports.
+
+### Tests
+
+- 438 total (up from 399). 39 new: New: extra ruff rules config/adapter/integration, bash guard
+  module extraction, git module extraction with session_hours bug fix, ledger pruning lifecycle.
+
 ## v0.8.0
 
 Session awareness — ecko remembers what happened and proves its value.

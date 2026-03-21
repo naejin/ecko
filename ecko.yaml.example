@@ -94,10 +94,21 @@ reverb:
 # Default: 0 (unlimited). Per-file cap (echo_cap_per_check) still applies.
 # echo_cap_cross_file: 15
 
+# Extra ruff rules — append additional ruff rule codes to ecko's built-in checks
+# Accepts full codes (C901, N801) and category prefixes (UP, SIM, C4).
+# Unmapped codes use their lowercased code as the check name (e.g., C901 -> c901).
+# These are additive — ecko's built-in rules always run.
+# See https://docs.astral.sh/ruff/rules/ for all available rule codes.
+# ruff_extra_rules:
+#   - C901     # function complexity
+#   - N801     # class name should use CapWords
+#   - UP       # pyupgrade (all rules in category)
+#   - SIM101   # use a single if instead of nested ifs
+
 # Disable specific built-in checks (by ecko check name)
 # Available checks: unused-imports, singleton-comparison, bare-except,
 #   star-imports, mutable-default-args, builtin-shadowing,
-#   empty-error-handlers (ruff), empty-block-statements (biome),
+#   empty-block-statements (biome),
 #   unreachable-code, debugger-statements, var-declarations, duplicate-keys,
 #   useless-catch, unicode-artifact, banned-pattern, obsolete-term,
 #   type-error, dead-code, unused-file, unused-export,

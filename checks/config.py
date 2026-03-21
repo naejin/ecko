@@ -8,6 +8,7 @@ and list-of-dicts for banned_patterns/obsolete_terms.
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 from checks.regex_utils import safe_regex_compile
@@ -354,6 +355,27 @@ def get_cross_file_echo_cap(config: dict[str, Any]) -> int:
     return 0
 
 
+# Ruff rule code format: uppercase letters + optional digits (e.g., C901, UP, SIM101, ASYNC100)
+_RUFF_RULE_RE = re.compile(r"^[A-Z]+[0-9]*$")
+
+
+def get_ruff_extra_rules(config: dict[str, Any]) -> list[str]:
+    """Return list of extra ruff rule codes from config.
+
+    Validates each code matches ruff's format (e.g., C901, N801, UP, SIM101).
+    Invalid codes are silently skipped (warned by validate_config separately).
+    """
+    rules = config.get("ruff_extra_rules", [])
+    if not isinstance(rules, list):
+        return []
+    valid: list[str] = []
+    for rule in rules:
+        code = str(rule).strip()
+        if code and _RUFF_RULE_RE.match(code):
+            valid.append(code)
+    return valid
+
+
 # --- Config validation ---
 
 _KNOWN_KEYS = frozenset(
@@ -371,6 +393,7 @@ _KNOWN_KEYS = frozenset(
         "disabled_checks",
         "session_hours",
         "echo_cap_cross_file",
+        "ruff_extra_rules",
     }
 )
 
@@ -412,6 +435,17 @@ def validate_config(config: dict[str, Any]) -> list[str]:
             if safe_regex_compile(pattern) is None:
                 warnings.append(
                     f"invalid or pathological regex in blocked_commands[{i}]: {pattern!r}"
+                )
+
+    # Validate ruff_extra_rules codes
+    extra_rules = config.get("ruff_extra_rules", [])
+    if isinstance(extra_rules, list):
+        for i, rule in enumerate(extra_rules):
+            code = str(rule).strip()
+            if code and not _RUFF_RULE_RE.match(code):
+                warnings.append(
+                    f"invalid ruff rule code in ruff_extra_rules[{i}]: {code!r}"
+                    f" (expected format: A001, SIM, UP035)"
                 )
 
     return warnings

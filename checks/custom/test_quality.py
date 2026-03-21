@@ -45,6 +45,9 @@ _CONSTANT_GUARD_NAMES = frozenset({
     "TYPE_CHECKING",
 })
 
+# Loop node types — if statements inside these with no assertions are data filters
+_LOOP_TYPES = (ast.For, ast.AsyncFor, ast.While)
+
 
 def _is_guard_clause(node: ast.If) -> bool:
     """Check if an if-statement is a guard clause we should skip.
@@ -162,19 +165,60 @@ def _iter_test_functions(tree: ast.Module):
                         yield child
 
 
+def _if_body_has_assert(node: ast.If) -> bool:
+    """Check if an if-statement body (or its else) contains any assert.
+
+    Uses shallow walk to avoid false positives from asserts inside
+    nested function definitions within the if body.
+    """
+    queue = deque(ast.iter_child_nodes(node))
+    while queue:
+        child = queue.popleft()
+        if isinstance(child, ast.Assert):
+            return True
+        if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            queue.extend(ast.iter_child_nodes(child))
+    return False
+
+
 def _check_test_conditional(tree: ast.Module) -> list[Echo]:
-    """Flag if/else inside test_* functions."""
+    """Flag if/else inside test_* functions.
+
+    Skips guard clauses (version checks, pytest.skip, early return, etc.)
+    and data-filtering ifs inside loops (if body contains no assertions).
+    """
     echoes: list[Echo] = []
     for node in _iter_test_functions(tree):
-        # Walk the function body but NOT into nested functions/classes
-        for child in _walk_shallow(node):
+        # BFS walk tracking loop depth, skip nested functions/classes
+        queue: deque[tuple[ast.AST, bool]] = deque(
+            (child, False) for child in ast.iter_child_nodes(node)
+        )
+        while queue:
+            child, in_loop = queue.popleft()
+
+            # Don't descend into nested functions or classes
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+
             if isinstance(child, ast.If) and not _is_guard_clause(child):
+                # Skip data-filtering ifs inside loops (no assertions in body)
+                if in_loop and not _if_body_has_assert(child):
+                    # Still walk into the if body for deeper ifs
+                    for sub in ast.iter_child_nodes(child):
+                        queue.append((sub, in_loop))
+                    continue
                 echoes.append(Echo(
                     check="test-conditional",
                     line=child.lineno,
-                    message="Conditional (if/else) in test function — tests should control state, not branch on it.",
+                    message="Conditional (if/else) in test function \u2014 tests should control state, not branch on it.",
                     suggestion="Parametrize or split into separate test cases.",
                 ))
+
+            # Children of loops are "in_loop"
+            child_in_loop = in_loop or isinstance(child, _LOOP_TYPES)
+            for sub in ast.iter_child_nodes(child):
+                queue.append((sub, child_in_loop))
+
     return echoes
 
 

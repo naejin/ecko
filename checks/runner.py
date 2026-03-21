@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -15,9 +14,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fnmatch import fnmatch
 
+from checks.bash_guard import check_bash_command, run_pre_tool_use_bash  # noqa: F401
 from checks.config import (
     get_banned_patterns,
-    get_blocked_commands,
     get_builtin_shadow_allowlist,
     get_cross_file_echo_cap,
     get_disabled_checks,
@@ -25,6 +24,7 @@ from checks.config import (
     get_exclude_patterns,
     get_import_rules,
     get_obsolete_terms,
+    get_ruff_extra_rules,
     get_session_hours,
     is_deep_enabled,
     is_reverb_enabled,
@@ -33,8 +33,18 @@ from checks.config import (
 )
 from checks.debug import debug
 from checks.fileutil import is_test_file
-from checks.regex_utils import safe_regex_compile, safe_regex_search
-from checks.result import Echo, emit, format_correction_summary, format_file_echoes, format_stop_echoes
+from checks.git import get_modified_files, normalize_path
+from checks.result import (
+    Echo,
+    emit,
+    format_correction_summary,
+    format_file_echoes,
+    format_stop_echoes,
+)
+
+# Re-exports for backward compatibility (moved to checks.git)
+_normalize_path = normalize_path
+_get_modified_files = get_modified_files
 
 # Paths that are almost never worth linting — skip by default.
 # Each entry is matched at any depth: "fixtures" matches both
@@ -204,6 +214,7 @@ def _run_layer2_checks(
     import_rules: list[dict] | None = None,
     ruff_available: bool = False,
     biome_available: bool = False,
+    extra_ruff_rules: list[str] | None = None,
 ) -> tuple[list[Echo], list[str]]:
     """Run Layer 2 checks on a single file.
 
@@ -222,7 +233,11 @@ def _run_layer2_checks(
             from checks.tools.ruff_adapter import run_ruff
 
             echoes.extend(
-                run_ruff(file_path, builtin_shadow_allowlist=shadow_allowlist)
+                run_ruff(
+                    file_path,
+                    builtin_shadow_allowlist=shadow_allowlist,
+                    extra_rules=extra_ruff_rules,
+                )
             )
     elif lang in ("typescript", "javascript"):
         if not biome_available:
@@ -301,6 +316,7 @@ def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
     disabled = get_disabled_checks(config)
     shadow_allowlist = get_builtin_shadow_allowlist(config)
     echo_cap = get_echo_cap(config)
+    extra_ruff_rules = get_ruff_extra_rules(config)
     lang = detect_language(file_path)
     debug(f"lang={lang} for {os.path.basename(file_path)}")
 
@@ -328,6 +344,7 @@ def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
         import_rules=get_import_rules(config),
         ruff_available=ruff_available,
         biome_available=biome_available,
+        extra_ruff_rules=extra_ruff_rules,
     )
 
     # Filter
@@ -355,14 +372,9 @@ def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
     return 0
 
 
-def _normalize_path(path: str, cwd: str) -> str:
-    """Normalize a file path to absolute, resolving relative paths against cwd."""
-    if os.path.isabs(path):
-        return os.path.normpath(path)
-    return os.path.normpath(os.path.join(cwd, path))
-
-
-def run_stop(cwd: str, plugin_root: str, files_override: list[str] | None = None) -> int:
+def run_stop(
+    cwd: str, plugin_root: str, files_override: list[str] | None = None
+) -> int:
     """Run Layer 3 (deep analysis) + Layer 2 re-sweep on all modified files."""
     t0 = time.monotonic()
     config = load_config(cwd)
@@ -379,10 +391,8 @@ def run_stop(cwd: str, plugin_root: str, files_override: list[str] | None = None
     if files_override is not None:
         raw_files = [_normalize_path(f, cwd) for f in files_override]
     else:
-        raw_files = _get_modified_files(cwd)
-    modified = [
-        f for f in raw_files if not is_excluded(f, cwd, user_excludes)
-    ]
+        raw_files = get_modified_files(cwd, session_hours=get_session_hours(config))
+    modified = [f for f in raw_files if not is_excluded(f, cwd, user_excludes)]
     if not modified:
         return 0
 
@@ -452,15 +462,19 @@ def run_stop(cwd: str, plugin_root: str, files_override: list[str] | None = None
                 futures[pool.submit(_run_knip)] = "knip"
 
         debug(f"layer3: dispatched {list(futures.values())}")
+        layer3_t0 = time.monotonic()
         for future in as_completed(futures):
             tool_name = futures[future]
+            tool_elapsed = time.monotonic() - layer3_t0
             try:
                 result = future.result()
             except Exception as exc:
+                debug(f"layer3: {tool_name} failed after {tool_elapsed:.1f}s")
                 emit(
                     f"~~ ecko ~~ warning: {tool_name} failed during deep analysis: {exc}\n"
                 )
                 continue
+            debug(f"layer3: {tool_name} completed in {tool_elapsed:.1f}s")
             for path, echoes in result.items():
                 norm = _normalize_path(path, cwd)
                 # Post-filter tsc/knip results to modified files only
@@ -471,6 +485,7 @@ def run_stop(cwd: str, plugin_root: str, files_override: list[str] | None = None
     # --- Layer 2: Re-sweep all modified files ---
     banned = get_banned_patterns(config)
     obsolete = get_obsolete_terms(config)
+    extra_ruff_rules = get_ruff_extra_rules(config)
 
     # Check Layer 2 tool availability once before the loop
     ruff_available = resolve_python_tool("ruff") is not None
@@ -498,6 +513,7 @@ def run_stop(cwd: str, plugin_root: str, files_override: list[str] | None = None
             import_rules=import_rules,
             ruff_available=ruff_available,
             biome_available=biome_available,
+            extra_ruff_rules=extra_ruff_rules,
         )
         if echoes:
             all_echoes.setdefault(_normalize_path(file_path, cwd), []).extend(echoes)
@@ -561,141 +577,6 @@ def run_stop(cwd: str, plugin_root: str, files_override: list[str] | None = None
     if is_reverb_enabled(config):
         emit("~~ ecko ~~ tip: run /ecko:reverb to capture what went wrong\n")
     return 1
-
-
-def check_bash_command(command: str, user_patterns: list[dict[str, str]]) -> str | None:
-    """Check a bash command against blocked patterns.
-
-    Returns the block message if the command should be blocked, or None if allowed.
-    """
-
-    # Hardcoded patterns (always active, truly dangerous)
-    # Note: rm patterns match optional full paths (/bin/rm, /usr/bin/rm),
-    # command prefix, and backslash escape (\rm) bypass variants.
-    _rm_prefix = r"(?:/(?:usr/)?(?:s?bin)/|\\|command\s+)?"
-    hardcoded = [
-        {
-            "pattern": r"git\b.*--no-verify",
-            "message": "Blocked: --no-verify skips hooks — remove it to let ecko checks run",
-        },
-        {
-            "pattern": _rm_prefix
-            + r"\brm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+/(\s|$|;|&|\|)",
-            "message": "Blocked: rm -rf / is catastrophic — specify a subdirectory",
-        },
-        {
-            "pattern": _rm_prefix
-            + r"\brm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+~(\s|$|;|&|\||/)",
-            "message": "Blocked: rm -rf ~ would delete the home directory",
-        },
-        {
-            "pattern": r"git\b(?!.*--force-with-lease).*\bpush\b.*(?:--force|-f)(\s|$|;|&|\|)",
-            "message": "Blocked: use --force-with-lease instead of --force to prevent overwriting remote work",
-        },
-        {
-            "pattern": r"git\b.*\breset\s+--hard(\s|$|;|&|\|)",
-            "message": "Blocked: git reset --hard discards commits permanently — use git stash or git revert instead",
-        },
-        {
-            "pattern": r"git\b.*\bclean\s+-[a-zA-Z]*f[a-zA-Z]*(\s|$|;|&|\|)",
-            "message": "Blocked: git clean -f deletes untracked files permanently — review with git clean -n first",
-        },
-    ]
-
-    for entry in hardcoded + user_patterns:
-        pattern_str = entry.get("pattern", "")
-        message = entry.get("message", "Command blocked by ecko")
-        if not pattern_str:
-            continue
-        compiled = safe_regex_compile(pattern_str)
-        if compiled is None:
-            continue
-        if safe_regex_search(compiled, command):
-            return message
-    return None
-
-
-def run_pre_tool_use_bash(cwd: str) -> int:
-    """Check a bash command from stdin and block if it matches dangerous patterns.
-
-    Exit 2 = block (PreToolUse convention), exit 0 = allow.
-    """
-    command = sys.stdin.read().strip()
-    if not command:
-        return 0
-
-    config = load_config(cwd)
-    user_patterns = get_blocked_commands(config)
-    result = check_bash_command(command, user_patterns)
-
-    if result:
-        emit(f"~~ ecko ~~ {result}\n")
-        return 2
-    return 0
-
-
-def _get_modified_files(cwd: str) -> list[str]:
-    """Get files modified in the current session via git."""
-    files: set[str] = set()
-    try:
-        # Staged changes
-        result = subprocess.run(
-            ["git", "diff", "--name-only", "--cached"],
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            timeout=10,
-        )
-        if result.returncode == 0:
-            for line in result.stdout.strip().splitlines():
-                if line:
-                    files.add(os.path.join(cwd, line))
-
-        # Unstaged changes
-        result = subprocess.run(
-            ["git", "diff", "--name-only"],
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            timeout=10,
-        )
-        if result.returncode == 0:
-            for line in result.stdout.strip().splitlines():
-                if line:
-                    files.add(os.path.join(cwd, line))
-
-        # Untracked files
-        result = subprocess.run(
-            ["git", "ls-files", "--others", "--exclude-standard"],
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            timeout=10,
-        )
-        if result.returncode == 0:
-            for line in result.stdout.strip().splitlines():
-                if line:
-                    files.add(os.path.join(cwd, line))
-
-        # Recently committed files (catch files committed during this session)
-        result = subprocess.run(
-            [
-                "git", "log", "--since=4h",
-                "--diff-filter=ACMR", "--name-only", "--pretty=format:",
-            ],
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            timeout=10,
-        )
-        if result.returncode == 0:
-            for line in result.stdout.strip().splitlines():
-                if line:
-                    files.add(os.path.join(cwd, line))
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
-
-    return sorted(files)
 
 
 def main() -> None:

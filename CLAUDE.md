@@ -8,7 +8,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `.claude-plugin/plugin.json` — plugin manifest
 - `hooks/hooks.json` — PreToolUse(Bash, ExitPlanMode) + PostToolUse(Write|Edit) + Stop hook wiring
 - `hooks/*.sh` — shell entry points that delegate to `checks/runner.py`
-- `checks/` — Python package: runner, config, result, formatter, regex_utils, fileutil, debug, ledger, tools/, custom/
+- `checks/` — Python package: runner, config, result, formatter, regex_utils, fileutil, debug, ledger, bash_guard, git, tools/, custom/
 - `commands/` — slash commands (ping, status, setup, tune, reverb)
 - `config/biome.json` — biome lint config (only ecko's rules enabled)
 - `scripts/` — install scripts (bash + powershell)
@@ -54,7 +54,8 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 ## Noise reduction (v0.5.0)
 - `builtin-shadowing` (ruff A001/A002): 20-name default allowlist filters idiomatic API params (`type`, `help`, `input`, `format`, `id`, `repr`, `ascii`, etc.). Configurable via `builtin_shadow_allowlist` in ecko.yaml — user list replaces default entirely
 - `var-declarations` / echo avalanches: capped at 5 per check per file (configurable via `echo_cap_per_check`). Overflow summarized as "... and N more"
-- `empty-block-statements` (biome noEmptyBlockStatements): renamed from `empty-error-handlers` to reflect actual scope. Python ruff S110 keeps `empty-error-handlers` name (it IS specific to try/except/pass)
+- `empty-block-statements` (biome noEmptyBlockStatements): renamed from `empty-error-handlers` to reflect actual scope
+- `empty-error-handlers` (ruff S110): removed from built-in rules in v0.9.1 — E722 (bare-except) catches the dangerous case; `try/except Exception: pass` is a legitimate guard pattern. Re-enable via `ruff_extra_rules: [S110]`
 - `unreachable-code`: yield-after-raise skipped in generators and `@contextmanager` functions (both custom check and vulture adapter)
 - `dead-code` (vulture): dunder-prefix filter (`__n`, `__get__`, etc.), expanded `_ALWAYS_SKIP` (`objtype`, `owner`, `sender`), dynamic pytest fixture collection from conftest.py files
 
@@ -104,6 +105,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - For AST-based checks on test functions: use `_iter_test_functions()` + `_walk_shallow()` to avoid nested function/class false positives
 - For AST-based checks on any functions: use `ast.iter_child_nodes(tree)` for module-level + `ast.iter_child_nodes(cls)` for class-level — never `ast.walk(tree)` which visits nested functions and corrupts parent tracking
 - Guard clause filters (in `_is_guard_clause`): skip `self.skipTest`, `pytest.skip/fail`, `raise pytest.skip`, early return, platform guards (`os.name`, `sys.version_info`, `sys.platform`)
+- `test-conditional` skips `if` inside `for`/`while`/`async for` loops when the `if` body contains no assertions — data-filtering pattern, not test branching. Loop-with-assert still flagged.
 - Regex patterns in bash guard: avoid `$` anchors (bypassed by trailing args), use `(\s|$|;|&|\|)` terminators instead
 - Bash guard `--force` pattern: must match both `--force` and `-f`; use command-wide `(?!.*--force-with-lease)` lookahead, not position-specific `(?!-with-lease)`
 - ReDoS test inputs: `"a" * 25 + "!"` triggers catastrophic backtracking for `(a+)+b`; `"a" * N + "c"` does NOT (engine fails fast). Always add wall-clock assertion with `time.monotonic()`
@@ -181,9 +183,22 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `format_correction_summary()` lives in `result.py` — all output formatting goes through `result.py`, not data modules
 - When `cross_file_cap` is active, `format_stop_echoes` header includes "(display capped at N per check)" so total count doesn't mislead
 
+## Configurable rules (v0.9.0)
+- `ruff_extra_rules` config key: flat string list of ruff rule codes appended to ecko's built-in `--select`
+- Valid format: `^[A-Z]+[0-9]*$` (accepts full codes like C901, prefixes like UP, and longer prefixes like ASYNC)
+- Unmapped codes use lowercased code as check name (e.g., C901 -> c901)
+- `disabled_checks` already handles suppression — no `ruff_disabled_rules` needed
+- Runner decomposition: `checks/bash_guard.py` (bash command guard) + `checks/git.py` (git file detection) extracted from runner.py
+- `checks/bash_guard.py` is self-contained (imports config, regex_utils, result) — same concern boundary as `checks/debug.py`
+- `checks/git.py` contains `get_modified_files()` and `normalize_path()` — pure subprocess/os utilities
+- Re-exports in runner.py for backward compat: `_normalize_path = normalize_path`, `_get_modified_files = get_modified_files`
+- `get_modified_files()` uses `session_hours` config (not hardcoded 4h) — format: `--since={minutes}m`
+- Ledger pruning: `_maybe_prune()` called from `read_session()`, dual-condition (>50% stale AND >50KB), atomic via `os.replace()`
+- Per-tool timing: debug-mode only, `layer3: {tool} completed in {N}s`
+
 ## Current version and next milestone
-- Current: v0.8.0 (session memory)
-- Previous: v0.7.0 (observability)
+- Current: v0.9.1 (noise reduction)
+- Previous: v0.9.0 (configurable rules)
 
 ## Not part of the plugin
 - `docs/ideas/` — internal ideation (gitignored)

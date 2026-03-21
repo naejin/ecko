@@ -598,6 +598,101 @@ class TestTestConditional:
         assert len(conditional_echoes) == 0
 
 
+    def test_skips_data_filter_if_in_for_loop(self, tmp_path):
+        """if inside for loop with no assert is data filtering — not a test conditional."""
+        f = tmp_path / "test_filter.py"
+        f.write_text(
+            "def test_validate_output():\n"
+            "    with open('data.jsonl') as fh:\n"
+            "        for line in fh:\n"
+            "            if line.strip():\n"
+            "                data = json.loads(line)\n"
+            "    assert data is not None\n",
+            encoding="utf-8",
+        )
+        echoes = check_test_quality(str(f))
+        conditional_echoes = [e for e in echoes if e.check == "test-conditional"]
+        assert len(conditional_echoes) == 0
+
+    def test_skips_data_filter_if_in_while_loop(self, tmp_path):
+        """if inside while loop with no assert is data filtering."""
+        f = tmp_path / "test_while.py"
+        f.write_text(
+            "def test_drain_queue():\n"
+            "    while not q.empty():\n"
+            "        item = q.get()\n"
+            "        if item is not None:\n"
+            "            results.append(item)\n"
+            "    assert len(results) == 3\n",
+            encoding="utf-8",
+        )
+        echoes = check_test_quality(str(f))
+        conditional_echoes = [e for e in echoes if e.check == "test-conditional"]
+        assert len(conditional_echoes) == 0
+
+    def test_flags_if_in_for_loop_with_assert(self, tmp_path):
+        """if inside for loop WITH assert is a real test conditional — should flag."""
+        f = tmp_path / "test_loop_assert.py"
+        f.write_text(
+            "def test_all_items_valid():\n"
+            "    for item in items:\n"
+            "        if item.active:\n"
+            "            assert item.valid\n",
+            encoding="utf-8",
+        )
+        echoes = check_test_quality(str(f))
+        conditional_echoes = [e for e in echoes if e.check == "test-conditional"]
+        assert len(conditional_echoes) == 1
+
+    def test_flags_if_outside_loop(self, tmp_path):
+        """if outside a loop is still flagged (existing behavior preserved)."""
+        f = tmp_path / "test_branch.py"
+        f.write_text(
+            "def test_platform():\n"
+            "    result = get_result()\n"
+            "    if result > 0:\n"
+            "        assert result == 42\n"
+            "    else:\n"
+            "        assert result == 0\n",
+            encoding="utf-8",
+        )
+        echoes = check_test_quality(str(f))
+        conditional_echoes = [e for e in echoes if e.check == "test-conditional"]
+        assert len(conditional_echoes) == 1
+
+    def test_skips_nested_filter_in_async_for(self, tmp_path):
+        """if inside async for with no assert is data filtering."""
+        f = tmp_path / "test_async.py"
+        f.write_text(
+            "async def test_stream():\n"
+            "    async for chunk in stream:\n"
+            "        if chunk:\n"
+            "            data.extend(chunk)\n"
+            "    assert len(data) > 0\n",
+            encoding="utf-8",
+        )
+        echoes = check_test_quality(str(f))
+        conditional_echoes = [e for e in echoes if e.check == "test-conditional"]
+        assert len(conditional_echoes) == 0
+
+    def test_skips_loop_filter_with_nested_function_assert(self, tmp_path):
+        """if in loop with assert only inside nested function is still data filtering."""
+        f = tmp_path / "test_nested_fn.py"
+        f.write_text(
+            "def test_process():\n"
+            "    for item in items:\n"
+            "        if item.valid:\n"
+            "            def checker():\n"
+            "                assert item.ok\n"
+            "            checker()\n"
+            "    assert True\n",
+            encoding="utf-8",
+        )
+        echoes = check_test_quality(str(f))
+        conditional_echoes = [e for e in echoes if e.check == "test-conditional"]
+        assert len(conditional_echoes) == 0
+
+
 class TestFixedWait:
     def test_detects_sleep(self):
         echoes = check_test_quality(str(FIXTURES / "test_fixed_wait.py"))
