@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.8.0
+
+Session awareness — ecko remembers what happened and proves its value.
+
+### New features
+
+- **Session ledger** — ecko records echo counts per file in `.ecko-session/ledger.jsonl`
+  (JSONL format). Each post-tool-use invocation appends one entry. Entries older than
+  the session window (default 4h, configurable via `session_hours`) are pruned automatically.
+- **Self-correction tracking** — stop hook reads the session ledger and reports how many
+  echoes the agent fixed: `~~ ecko ~~ self-corrections: 3 fixed (3 unused-imports)`.
+  Compares first vs last entry per (file, check).
+- **Cross-file echo cap** (`echo_cap_cross_file`) — limits repeated echoes of the same check
+  across all files in stop mode. Default 0 (unlimited). Prevents info overload when a single
+  check floods output across many files.
+
+### Tests
+
+- 399 total (up from 347). New: ledger operations, self-correction computation, cross-file cap,
+  config getters, integration tests for ledger lifecycle.
+
 ## v0.7.0
 
 Observability — ecko always tells you what it did.

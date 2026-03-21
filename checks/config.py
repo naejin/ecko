@@ -338,6 +338,22 @@ def is_reverb_enabled(config: dict[str, Any]) -> bool:
     return False
 
 
+def get_session_hours(config: dict[str, Any]) -> float:
+    """Return the session ledger time window in hours. Default 4, 0 = disabled."""
+    val = config.get("session_hours", 4)
+    if isinstance(val, (int, float)):
+        return float(val)
+    return 4.0
+
+
+def get_cross_file_echo_cap(config: dict[str, Any]) -> int:
+    """Return the per-check cross-file echo cap. Default 0 (unlimited)."""
+    cap = config.get("echo_cap_cross_file", 0)
+    if isinstance(cap, int):
+        return cap
+    return 0
+
+
 # --- Config validation ---
 
 _KNOWN_KEYS = frozenset(
@@ -353,6 +369,8 @@ _KNOWN_KEYS = frozenset(
         "blocked_commands",
         "reverb",
         "disabled_checks",
+        "session_hours",
+        "echo_cap_cross_file",
     }
 )
 

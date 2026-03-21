@@ -8,7 +8,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `.claude-plugin/plugin.json` — plugin manifest
 - `hooks/hooks.json` — PreToolUse(Bash, ExitPlanMode) + PostToolUse(Write|Edit) + Stop hook wiring
 - `hooks/*.sh` — shell entry points that delegate to `checks/runner.py`
-- `checks/` — Python package: runner, config, result, formatter, regex_utils, fileutil, debug, tools/, custom/
+- `checks/` — Python package: runner, config, result, formatter, regex_utils, fileutil, debug, ledger, tools/, custom/
 - `commands/` — slash commands (ping, status, setup, tune, reverb)
 - `config/biome.json` — biome lint config (only ecko's rules enabled)
 - `scripts/` — install scripts (bash + powershell)
@@ -135,7 +135,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Update `commands/` listing in Structure section of CLAUDE.md if adding/removing commands
 - Update commands table in README.md if adding/removing commands
 - Update `docs/ideas/ideas-done.md` and `ideas-todo.md`
-- CHANGELOG test count must match actual `pytest` output (currently 347)
+- CHANGELOG test count must match actual `pytest` output (currently 399)
 - Update test count in both CHANGELOG.md AND CLAUDE.md after final stabilization, not after initial implementation (review rounds add tests)
 - Update README.md checks tables when adding new checks
 
@@ -165,9 +165,22 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `placeholder-code` check: flags Python `pass`/`...`/`raise NotImplementedError` sole-body functions (skips abstractmethod, overload, Protocol, test files, .pyi) and JS/TS `throw new Error("not implemented")`
 - Shell hooks use `printf` not `echo` for cross-platform consistency
 
+## Session ledger (v0.8.0)
+- `.ecko-session/ledger.jsonl` — append-only JSONL, pruned to rolling session window on each write
+- Session boundary: 4h default (matches `--since=4h`), configurable via `session_hours`
+- Schema: `{"ts": float, "file": "rel/path", "mode": "post-tool-use"|"stop", "echoes": {"check": count}}`
+- Clean files recorded as `{"echoes": {}}` — enables future first-pass-clean rate
+- `checks/ledger.py` is a pure data module (imports only `json`, `os`, `time`, `typing`) — no `emit()`, no I/O to stderr
+- Self-correction: per-(file, check) count delta between first and last post-tool-use entry — stop hook only, single line output
+- Cross-file echo cap: per-check across files in stop mode, default 0 (off), applied in `format_stop_echoes()`
+- `record_echoes()` called from `run_post_tool_use()` — records every file including clean ones
+- All ledger I/O is try/except guarded — failure never blocks or crashes hooks
+- `.ecko-session/` is in `_DEFAULT_EXCLUDE_DIRS` — never linted
+- Config keys: `session_hours` (flat, default 4), `echo_cap_cross_file` (flat, default 0)
+
 ## Current version and next milestone
-- Current: v0.7.0 (observability)
-- Previous: v0.6.1 (tech debt + reverb/tune UX)
+- Current: v0.8.0 (session memory)
+- Previous: v0.7.0 (observability)
 
 ## Not part of the plugin
 - `docs/ideas/` — internal ideation (gitignored)

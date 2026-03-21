@@ -19,11 +19,13 @@ from checks.config import (
     get_banned_patterns,
     get_blocked_commands,
     get_builtin_shadow_allowlist,
+    get_cross_file_echo_cap,
     get_disabled_checks,
     get_echo_cap,
     get_exclude_patterns,
     get_import_rules,
     get_obsolete_terms,
+    get_session_hours,
     is_deep_enabled,
     is_reverb_enabled,
     load_config,
@@ -32,7 +34,7 @@ from checks.config import (
 from checks.debug import debug
 from checks.fileutil import is_test_file
 from checks.regex_utils import safe_regex_compile, safe_regex_search
-from checks.result import Echo, emit, format_file_echoes, format_stop_echoes
+from checks.result import Echo, emit, format_correction_summary, format_file_echoes, format_stop_echoes
 
 # Paths that are almost never worth linting — skip by default.
 # Each entry is matched at any depth: "fixtures" matches both
@@ -45,6 +47,7 @@ _DEFAULT_EXCLUDE_DIRS = [
     "node_modules",
     ".git",
     ".ecko-reverb",
+    ".ecko-session",
     "dist",
     "build",
     "__pycache__",
@@ -333,6 +336,19 @@ def run_post_tool_use(file_path: str, cwd: str, plugin_root: str) -> int:
 
     _emit_skipped_tools(skipped)
 
+    # Record to session ledger (best-effort, never blocks the hook)
+    session_hours = get_session_hours(config)
+    if session_hours > 0:
+        try:
+            from checks.ledger import append as ledger_append
+
+            echo_counts: dict[str, int] = {}
+            for e in echoes:
+                echo_counts[e.check] = echo_counts.get(e.check, 0) + 1
+            ledger_append(cwd, file_path, "post-tool-use", echo_counts)
+        except Exception:
+            pass
+
     if echoes:
         emit(format_file_echoes(file_path, echoes, echo_cap=echo_cap))
         return 1
@@ -513,16 +529,35 @@ def run_stop(cwd: str, plugin_root: str, files_override: list[str] | None = None
 
     elapsed = time.monotonic() - t0
 
+    # Session ledger: read + self-correction summary
+    correction_line = ""
+    session_hours = get_session_hours(config)
+    if session_hours > 0:
+        try:
+            from checks.ledger import compute_self_corrections, read_session
+
+            entries = read_session(cwd, session_hours=session_hours)
+            corrections = compute_self_corrections(entries)
+            correction_line = format_correction_summary(corrections)  # from result.py
+        except Exception:
+            pass
+
+    cross_cap = get_cross_file_echo_cap(config)
+
     if not all_echoes:
         emit(
             f"~~ ecko ~~ clean sweep — 0 echoes across"
             f" {len(modified)} file{'s' if len(modified) != 1 else ''}"
             f" ({elapsed:.1f}s)\n"
         )
+        if correction_line:
+            emit(correction_line)
         return 0
 
-    emit(format_stop_echoes(all_echoes, echo_cap=echo_cap))
+    emit(format_stop_echoes(all_echoes, echo_cap=echo_cap, cross_file_cap=cross_cap))
     emit(f"~~ ecko ~~ finished in {elapsed:.1f}s\n")
+    if correction_line:
+        emit(correction_line)
     if is_reverb_enabled(config):
         emit("~~ ecko ~~ tip: run /ecko:reverb to capture what went wrong\n")
     return 1

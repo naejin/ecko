@@ -1,6 +1,6 @@
 # ecko
 
-[![v0.7.0](https://img.shields.io/badge/version-0.7.0-blue)](https://github.com/naejin/ecko/releases/tag/v0.7.0)
+[![v0.8.0](https://img.shields.io/badge/version-0.8.0-blue)](https://github.com/naejin/ecko/releases/tag/v0.8.0)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-plugin-7c3aed)](https://docs.anthropic.com/en/docs/claude-code)
 [![Python](https://img.shields.io/badge/python-3.10+-3776ab?logo=python&logoColor=white)](https://python.org)
 [![TypeScript](https://img.shields.io/badge/typescript-supported-3178c6?logo=typescript&logoColor=white)](https://typescriptlang.org)

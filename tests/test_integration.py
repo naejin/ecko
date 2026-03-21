@@ -513,3 +513,91 @@ class TestDebugModeIntegration:
         """Without ECKO_DEBUG, no debug lines should appear."""
         code, output = run_ecko("clean.py")
         assert "~~ ecko ~~ debug:" not in output
+
+
+class TestLedgerIntegration:
+    """Tests for the session ledger."""
+
+    @pytest.mark.skipif(not has_uvx, reason="uvx not available")
+    def test_post_tool_use_creates_ledger(self, tmp_path):
+        """PostToolUse should create .ecko-session/ledger.jsonl when echoes found."""
+        _init_git_repo(tmp_path)
+        f = tmp_path / "bad.py"
+        f.write_text("import os\nimport sys\n")
+        # Run via subprocess to simulate real hook invocation
+        subprocess.run(
+            [
+                sys.executable, RUNNER,
+                "--file", str(f),
+                "--mode", "post-tool-use",
+                "--cwd", str(tmp_path),
+                "--plugin-root", PLUGIN_ROOT,
+            ],
+            capture_output=True, text=True, timeout=60,
+        )
+        ledger = tmp_path / ".ecko-session" / "ledger.jsonl"
+        assert ledger.is_file()
+        content = ledger.read_text()
+        assert "unused-imports" in content
+
+    def test_post_tool_use_records_clean_file(self, tmp_path):
+        """PostToolUse should record clean files too (empty echoes)."""
+        _init_git_repo(tmp_path)
+        f = tmp_path / "clean.py"
+        f.write_text("def hello():\n    return 'hello'\n")
+        subprocess.run(
+            [
+                sys.executable, RUNNER,
+                "--file", str(f),
+                "--mode", "post-tool-use",
+                "--cwd", str(tmp_path),
+                "--plugin-root", PLUGIN_ROOT,
+            ],
+            capture_output=True, text=True, timeout=60,
+        )
+        ledger = tmp_path / ".ecko-session" / "ledger.jsonl"
+        assert ledger.is_file()
+
+    @pytest.mark.skipif(not has_uvx, reason="uvx not available")
+    def test_stop_reports_self_corrections(self, tmp_path):
+        """Stop should report corrections when echoes were fixed during session."""
+        _init_git_repo(tmp_path)
+        f = tmp_path / "app.py"
+        # First: write file with issues
+        f.write_text("import os\nimport sys\n")
+        subprocess.run(
+            [
+                sys.executable, RUNNER,
+                "--file", str(f),
+                "--mode", "post-tool-use",
+                "--cwd", str(tmp_path),
+                "--plugin-root", PLUGIN_ROOT,
+            ],
+            capture_output=True, text=True, timeout=60,
+        )
+        # Second: fix the file
+        f.write_text("def hello():\n    return 'hello'\n")
+        subprocess.run(
+            [
+                sys.executable, RUNNER,
+                "--file", str(f),
+                "--mode", "post-tool-use",
+                "--cwd", str(tmp_path),
+                "--plugin-root", PLUGIN_ROOT,
+            ],
+            capture_output=True, text=True, timeout=60,
+        )
+        # Run stop
+        code, output = run_ecko_stop(str(tmp_path))
+        assert "self-corrections" in output
+
+    def test_ledger_dir_excluded(self, tmp_path):
+        """Files in .ecko-session/ should not be linted."""
+        _init_git_repo(tmp_path)
+        session_dir = tmp_path / ".ecko-session"
+        session_dir.mkdir()
+        f = session_dir / "test.py"
+        f.write_text("import os\n")  # Would trigger unused-imports
+        code, output = run_ecko_stop(str(tmp_path), files=".ecko-session/test.py")
+        # Should be excluded — clean sweep or no echoes about this file
+        assert "unused-imports" not in output

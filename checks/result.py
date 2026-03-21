@@ -61,23 +61,38 @@ def format_file_echoes(
     return "\n".join(lines)
 
 
+_CROSS_CAP_ADVICE = "capped at {cap} per check across files — set echo_cap_cross_file: 0 in ecko.yaml to see all"
+
+
 def format_stop_echoes(
-    file_echoes: dict[str, list[Echo]], echo_cap: int = 0
+    file_echoes: dict[str, list[Echo]], echo_cap: int = 0, cross_file_cap: int = 0
 ) -> str:
     """Format echoes for the stop hook (Layer 3 deep analysis output)."""
     total = sum(len(e) for e in file_echoes.values())
     if total == 0:
         return ""
     file_count = len(file_echoes)
+    cap_note = f" (display capped at {cross_file_cap} per check)" if cross_file_cap > 0 else ""
     lines = [
-        f"~~ ecko ~~  final sweep  ~~  {total} {'echo' if total == 1 else 'echoes'} across {file_count} {'file' if file_count == 1 else 'files'}",
+        f"~~ ecko ~~  final sweep  ~~  {total} {'echo' if total == 1 else 'echoes'} across {file_count} {'file' if file_count == 1 else 'files'}{cap_note}",
         "",
     ]
+
+    # Track per-check counts across all files for cross-file cap
+    cross_counts: dict[str, int] = {}
+    cross_overflow: dict[str, int] = {}
+
     i = 1
     for path, echoes in file_echoes.items():
         lines.append(f"  {path}:")
         displayed, overflow = _cap_echoes(echoes, echo_cap)
         for echo in displayed:
+            # Apply cross-file cap
+            if cross_file_cap > 0:
+                cross_counts[echo.check] = cross_counts.get(echo.check, 0) + 1
+                if cross_counts[echo.check] > cross_file_cap:
+                    cross_overflow[echo.check] = cross_overflow.get(echo.check, 0) + 1
+                    continue
             detail = echo.message
             if echo.suggestion:
                 detail += f" {echo.suggestion}"
@@ -88,7 +103,28 @@ def format_stop_echoes(
         if overflow:
             lines.append(f"    ({_CAP_ADVICE.format(cap=echo_cap)})")
         lines.append("")
+
+    # Cross-file overflow summary
+    if cross_overflow:
+        for check, count in cross_overflow.items():
+            lines.append(f"  ... and {count} more {check} across other files")
+        lines.append(f"  ({_CROSS_CAP_ADVICE.format(cap=cross_file_cap)})")
+        lines.append("")
+
     return "\n".join(lines)
+
+
+def format_correction_summary(corrections: dict[str, int]) -> str:
+    """Format a one-line self-correction summary for stop hook output.
+
+    Returns empty string if no corrections.
+    """
+    if not corrections:
+        return ""
+    fixed = sum(corrections.values())
+    breakdown = sorted(corrections.items(), key=lambda x: -x[1])
+    parts = [f"{count} {check}" for check, count in breakdown]
+    return f"~~ ecko ~~ self-corrections: {fixed} fixed ({', '.join(parts)})\n"
 
 
 def emit(text: str) -> None:

@@ -85,6 +85,15 @@ blocked_commands: []
 reverb:
   enabled: false             # default: false
 
+# Session ledger — rolling window for self-correction tracking
+# Records echo counts per file per hook invocation in .ecko-session/ledger.jsonl
+# session_hours: 4           # default: 4 (rolling window in hours, 0 = disabled)
+
+# Cross-file echo cap — per-check limit across all files in stop mode output
+# Useful when the same check floods output across many files
+# Default: 0 (unlimited). Per-file cap (echo_cap_per_check) still applies.
+# echo_cap_cross_file: 15
+
 # Disable specific built-in checks (by ecko check name)
 # Available checks: unused-imports, singleton-comparison, bare-except,
 #   star-imports, mutable-default-args, builtin-shadowing,

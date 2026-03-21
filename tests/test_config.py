@@ -5,9 +5,11 @@ from __future__ import annotations
 from checks.config import (
     _parse_yaml_subset,
     get_banned_patterns,
+    get_cross_file_echo_cap,
     get_disabled_checks,
     get_exclude_patterns,
     get_obsolete_terms,
+    get_session_hours,
     is_autofix_enabled,
     is_deep_enabled,
     load_config,
@@ -198,3 +200,45 @@ class TestValidateConfig:
         assert len(warnings) == 1
         assert "banned_patterns[0]" in warnings[0]
         assert "invalid" in warnings[0].lower() or "pathological" in warnings[0].lower()
+
+
+class TestSessionHours:
+    def test_default(self):
+        assert get_session_hours({}) == 4.0
+
+    def test_custom(self):
+        assert get_session_hours({"session_hours": 6}) == 6.0
+
+    def test_zero_disables(self):
+        assert get_session_hours({"session_hours": 0}) == 0.0
+
+    def test_invalid_type(self):
+        assert get_session_hours({"session_hours": "bad"}) == 4.0
+
+
+class TestCrossFileEchoCap:
+    def test_default(self):
+        assert get_cross_file_echo_cap({}) == 0
+
+    def test_custom(self):
+        assert get_cross_file_echo_cap({"echo_cap_cross_file": 15}) == 15
+
+    def test_zero_unlimited(self):
+        assert get_cross_file_echo_cap({"echo_cap_cross_file": 0}) == 0
+
+    def test_invalid_type(self):
+        assert get_cross_file_echo_cap({"echo_cap_cross_file": "bad"}) == 0
+
+
+class TestKnownKeysIncludeNew:
+    def test_session_hours_in_known_keys(self):
+        config = {"session_hours": 4}
+        warnings = validate_config(config)
+        unknown = [w for w in warnings if "unknown config key" in w and "session_hours" in w]
+        assert unknown == []
+
+    def test_echo_cap_cross_file_in_known_keys(self):
+        config = {"echo_cap_cross_file": 15}
+        warnings = validate_config(config)
+        unknown = [w for w in warnings if "unknown config key" in w and "echo_cap_cross_file" in w]
+        assert unknown == []
