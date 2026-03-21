@@ -8,8 +8,8 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `.claude-plugin/plugin.json` — plugin manifest
 - `hooks/hooks.json` — PreToolUse(Bash, ExitPlanMode) + PostToolUse(Write|Edit) + Stop hook wiring
 - `hooks/*.sh` — shell entry points that delegate to `checks/runner.py`
-- `checks/` — Python package: runner, config, result, formatter, regex_utils, fileutil, debug, ledger, bash_guard, git, tools/, custom/
-- `commands/` — slash commands (ping, status, setup, tune, reverb)
+- `checks/` — Python package: runner, config, result, formatter, regex_utils, fileutil, debug, ledger, bash_guard, git, fingerprint, session_stats, tools/, custom/
+- `commands/` — slash commands (ping, status, setup, tune, reverb, session)
 - `config/biome.json` — biome lint config (only ecko's rules enabled)
 - `scripts/` — install scripts (bash + powershell)
 - `tests/` — pytest suite with fixtures/
@@ -28,6 +28,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - YAML subset parser only supports one level of nesting — new config keys must be flat (e.g., `ruff_extra_rules`, not `ruff: extra_rules:`)
 - Tools auto-resolve via `checks/tools/resolve.py`: PATH first → `uvx`/`pipx run` (Python) → `npx`/`pnpx` (Node)
 - When binary != package (e.g. `tsc` from `typescript`), use `resolve_node_tool("tsc", package="typescript")`
+- `resolve_binary_tool()` in resolve.py for system binaries (Go, Rust) — PATH only, no package manager fallback
 - `checks/debug.py` is a pure utility (imports only `os` + `sys`) — module-level `_DEBUG` flag from `ECKO_DEBUG` env var, single `debug()` function
 - `checks/debug.py` uses `sys.stderr.write` directly (not `emit()`) — importing result.py would add a dependency to what must be importable from anywhere
 - Hook output goes to stderr (`result.emit()`) — that's how Claude Code reads it
@@ -38,7 +39,13 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Vulture framework-injected params (`_ALWAYS_SKIP`) filtered everywhere; pytest fixtures (`_PYTEST_SKIP` + dynamic conftest scan) filtered only in test/conftest files
 - Vulture yield-after-raise filtered in both custom check and vulture adapter (generator protocol pattern)
 - Builtin-shadowing filtered by configurable allowlist in ruff adapter (20-name default)
-- Echo cap per check per file applied in result formatters, not in runner — cap is display-only, doesn't affect detection
+- Compact echo format: 1 line per file (`~~ ecko ~~ file — check (L1, L2 +N)`). `_COMPACT_LINES_PER_CHECK = 3` line numbers shown per check before overflow.
+- `format_file_echoes()` and `format_stop_echoes()` no longer accept `echo_cap` parameter — compact format handles overflow via +N notation
+- Echo `severity` field: `"warn"` (default) or `"error"`. Only `[error]` prefix shown in text output; warn is implicit. Set in adapters, not runner.
+- `_ERROR_CODES` in ruff_adapter.py: frozenset of ruff codes that get `severity="error"` (E722, F403)
+- `output_format: json` — schema v1 JSON output to stderr. No echo caps applied (machine consumers need complete data). Exit codes unchanged.
+- Stop-mode ledger scoping: when session ledger has post-tool-use entries, stop mode intersects `get_modified_files()` with ledger-tracked files — prevents flooding with pre-existing issues on first use of existing projects
+- `session_entries` read once in `run_stop()` — used for both ledger scoping AND correction/stats. Never call `read_session()` twice.
 - Config values (`shadow_allowlist`, `echo_cap`, `import_rules`) computed once before file loops in runner.py — never inside per-file loops (same config, no need to recompute)
 - Test file detection is filename-only (`test_*.py`, `*_test.py`, `conftest.py`, `conftest.pyi`) via `checks/fileutil.is_test_file()` — never directory-based (avoids running test checks on `tests/helpers.py`)
 - AST checks on test functions use `_iter_test_functions` (module + class level only) — never `ast.walk(tree)` which finds nested `test_*`-prefixed helpers
@@ -51,6 +58,13 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - JS/TS import extraction (`_extract_js_imports`) skips commented-out imports via `_is_in_js_comment()` heuristic
 - `safe_regex_compile()` in `checks/regex_utils.py` caches compiled patterns in `_compiled_cache` — each pattern compiled at most once per process. Timeouts are NOT cached (allow retry); only `re.error` failures cache `None`.
 - Fixture cache (`_fixture_cache`) stores `(paths, mtime, names)` — compares path lists to detect new conftest.py files
+- `checks/fingerprint.py` is a pure utility (imports only `os`, `json`) — `detect_frameworks(cwd)` returns set of framework identifiers, no caching yet
+- `_FRAMEWORK_VULTURE_SKIPS` in vulture_adapter.py: per-framework skip sets (FastAPI, Flask, Django) applied when fingerprint detects the framework
+- Dunder methods (`__enter__`, `__exit__`, etc.) skipped by placeholder-code check — protocol stubs, not placeholders
+- Dunder-prefixed params (`__doc__`, `__name__`) skipped by builtin-shadowing filter — intentional API design, not accidental shadowing
+- `ruff_use_project_config` always passes `--no-fix` (safety invariant) and drops `--select`. Emits warning (once) if `ruff_extra_rules` is also set.
+- `biome_use_project_config` uses `_to_kebab()` for unknown rule name mapping (only when project config active). `_find_project_biome_config()` walks up from file dir.
+- `checks/session_stats.py`: standalone script for `/ecko:session` command (prints to stdout, not stderr)
 
 ## Noise reduction (v0.5.0)
 - `builtin-shadowing` (ruff A001/A002): 20-name default allowlist filters idiomatic API params (`type`, `help`, `input`, `format`, `id`, `repr`, `ascii`, etc.). Configurable via `builtin_shadow_allowlist` in ecko.yaml — user list replaces default entirely
@@ -76,7 +90,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `builtin-shadowing`: `object`, `print`, `all` intentionally NOT in default allowlist — users can add via config
 - `singleton-comparison` in test files: `== True`/`== False` in test assertions is intentional equality testing
 - Pyright "unknown import symbol": not yet filtered (only "could not be resolved" is filtered)
-- Vulture FastAPI DI params: route handler params injected by framework are flagged as unused
+- Vulture FastAPI DI params: partially mitigated by `_FRAMEWORK_VULTURE_SKIPS` (fingerprint-driven), but route-specific params like `Depends(get_db)` return values still flagged
 
 ## Cross-platform gotchas
 - Always `open()` with `encoding="utf-8"` — Windows Python 3.10/3.12 defaults to cp1252, which silently fails on UTF-8 multi-byte chars (e.g. smart quotes contain byte 0x9d, undefined in cp1252)
@@ -86,6 +100,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Shell hooks: use `printf '%s' "$VAR"` not `echo "$VAR"` — echo handles escape sequences inconsistently across platforms
 - Shell hooks: always include `set -euo pipefail` for consistency, even in trivial scripts
 - Integration tests that assert on clean output (`output == ""`) must tolerate tool warnings — on Windows, tools may resolve via npx but fail with WinError 2
+- Adapter post-filter tests: use `os.path.normpath()` on both cwd and modified_files paths — Windows normalizes `/tmp/project` to `\tmp\project`
 - `_get_modified_files` includes recently committed files — tests asserting `output == ""` after commit must account for clean-sweep message
 - Debug mode smoke test: `ECKO_DEBUG=1 python3 checks/runner.py --file <path> --mode post-tool-use --cwd <dir> --plugin-root .`
 - Stop mode with explicit files: `python3 checks/runner.py --file x --mode stop --cwd <dir> --plugin-root . --files file1.py,file2.py`
@@ -95,7 +110,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Check names are kebab-case: `unused-imports`, `unicode-artifact`, `dead-code`
 - Tool adapters follow a pattern: `run_<tool>(args) -> list[Echo]` (per-file) or `-> dict[str, list[Echo]]` (multi-file)
 - Custom checks follow: `check_<name>(file_path) -> list[Echo]`
-- Graceful skip: resolver returns None → return empty list, never error. Never call `shutil.which()` directly in adapters.
+- Graceful skip: resolver returns None → return empty list, never error. Never call `shutil.which()` directly in adapters — use `resolve_binary_tool()` for system binaries.
 - Adapter error handling: catch `TimeoutExpired` and `OSError` separately, call `emit()` with descriptive warning, return empty
 - BFS queues: use `collections.deque` with `popleft()`, never `list.pop(0)` (O(n) per pop)
 
@@ -125,7 +140,8 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Real-world validation: clone repos to `/tmp/`, run checks via `check_test_quality()` or `run_post_tool_use()` directly, assess TP/FP rates
 - Validation results: `docs/ideas/validation-results.md` (52 repos + v0.5.0 release validation)
 - 10-repo validation command: `python3 checks/runner.py --file /tmp/ecko-test-{repo}/{file} --mode post-tool-use --cwd /tmp/ecko-test-{repo} --plugin-root /home/daylon/projects/ecko`
-- 10-repo validation suite: Flask, FastAPI, httpx, Rich, Click, Pydantic, Express, Preact, Zod, Chalk
+- 10-repo validation suite: Flask, FastAPI, httpx, Rich, Pydantic, Express, Preact, Zod, Gin, Serde
+- Dry-run smoke test: `python3 checks/runner.py --file <path> --mode dry-run --cwd <dir> --plugin-root .`
 - Stop-mode validation: copy source to tmp dir, `git init` + commit all, modify files (append newline), then run `--mode stop`. Must copy WITHOUT `.git` dir (`shutil.copytree` with `ignore_patterns('.git')`) or nested git confuses `_get_modified_files()`
 - Use parallel subagents for multi-repo validation (5 agents x 2 repos each works well)
 - CI matrix: `{ubuntu, macos, windows} × {Python 3.10, 3.12}` — 6 jobs total (`.github/workflows/test.yml`)
@@ -141,7 +157,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Update `commands/` listing in Structure section of CLAUDE.md if adding/removing commands
 - Update commands table in README.md if adding/removing commands
 - Update `docs/ideas/ideas-done.md` and `ideas-todo.md`
-- CHANGELOG test count must match actual `pytest` output (currently 399)
+- CHANGELOG test count must match actual `pytest` output (currently 568)
 - Update test count in both CHANGELOG.md AND CLAUDE.md after final stabilization, not after initial implementation (review rounds add tests)
 - Update README.md checks tables when adding new checks
 
@@ -168,7 +184,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `--files` CLI argument for stop mode overrides git detection (comma-separated file list)
 - Clean-sweep message: `~~ ecko ~~ clean sweep — 0 echoes across N files (Xs)` when stop finds no issues
 - Stop-mode timing: `~~ ecko ~~ finished in Xs` when echoes found
-- `placeholder-code` check: flags Python `pass`/`...`/`raise NotImplementedError` sole-body functions (skips abstractmethod, overload, Protocol, test files, .pyi) and JS/TS `throw new Error("not implemented")`
+- `placeholder-code` check: flags Python `pass`/`...`/`raise NotImplementedError` sole-body functions (skips abstractmethod, overload, Protocol, test files, .pyi, dunder methods) and JS/TS `throw new Error("not implemented")`
 - Shell hooks use `printf` not `echo` for cross-platform consistency
 
 ## Session ledger (v0.8.0)
@@ -201,9 +217,39 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `get_modified_files()` uses minutes format (`--since={N}m`) for sub-hour `session_hours` precision
 - Swarm reports for version planning live in `swarm/` — future versions should reference prior swarm deferred-item tables
 
+## Project config (v1.0)
+- `ruff_use_project_config`: bool, drops `--select`, defers to project ruff.toml/pyproject.toml
+- `biome_use_project_config`: bool, drops `--config-path`, uses project biome.json/biome.jsonc
+- `/ecko:session` command: reads session ledger, shows files touched, top checks, self-correction rate
+- `format_session_stats()` in result.py: one-line session summary after stop hook output
+- Runner section comments: `# --- Filtering ---`, `# --- Tool availability ---`, `# --- Layer 2 dispatch ---`, `# --- Layer 3 dispatch ---`
+
+## Severity + machine output (v1.1)
+- Echo dataclass gains `severity: str = "warn"` field
+- `has_errors(echoes)` helper in result.py
+- `format_file_echoes_json()` and `format_stop_echoes_json()` in result.py — schema v1
+- `output_format` config key: `"text"` (default) or `"json"`, read once in runner
+- `_KNOWN_KEYS` updated: `output_format`, `ruff_use_project_config`, `biome_use_project_config`
+
+## Go + Rust (v1.2)
+- `checks/tools/golangci_adapter.py`: `run_golangci(cwd, modified_files) -> dict[str, list[Echo]]`
+- `checks/tools/clippy_adapter.py`: `run_clippy(cwd, modified_files) -> dict[str, list[Echo]]`
+- Both Layer 3 only, dispatched in `run_stop()` thread pool
+- golangci-lint: `--out-format json`, capital-I `"Issues"`, check names `go-{linter}`
+- clippy: `--message-format=json`, streaming JSON (one object per line), check names `rust-{code}`, uses primary span (`is_primary: true`)
+- LANG_MAP extended: `.go` → `"go"`, `.rs` → `"rust"`
+- Both use `resolve_binary_tool()` (not `shutil.which` directly)
+- Severity mapped from tool output: golangci `Severity` field, clippy `level` field
+
+## Fingerprinting + dry-run (v1.3)
+- `checks/fingerprint.py`: detects Django, Flask, FastAPI, Express, Next.js, React, Vue from requirements.txt/pyproject.toml/package.json
+- 10KB cap on dependency files, no dev/main dep distinction (known limitation: FastAPI test deps can detect flask)
+- `--mode dry-run`: lists applicable checks without executing tools, always returns 0
+- `run_dry_run()` in runner.py, outputs to stdout (informational, not a hook)
+
 ## Current version and next milestone
-- Current: v0.9.1 (noise reduction)
-- Previous: v0.9.0 (configurable rules)
+- Current: v1.3.0 (fingerprinting + dry-run)
+- Previous: v0.9.1 (noise reduction)
 
 ## Not part of the plugin
 - `docs/ideas/` — internal ideation (gitignored)
