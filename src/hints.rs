@@ -60,7 +60,7 @@ pub fn contextual_suggestion(check: &str, file_path: &str, _message: &str) -> St
             if is_init {
                 "if re-exporting, add the name to `__all__`. Suppress: `# ecko:ignore[unused-imports]`"
                     .to_string()
-            } else if is_test {
+            } else if is_test && file_path.ends_with(".py") {
                 "if this is a pytest fixture, ensure the fixture name matches the import exactly"
                     .to_string()
             } else {

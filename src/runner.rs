@@ -41,8 +41,10 @@ pub struct EditContext {
 /// (defensive fallback: caller should not filter echoes).
 fn compute_changed_lines(source: &str, edit: &EditContext) -> Option<HashSet<usize>> {
     if edit.new_string.is_empty() {
-        // Deletion -- no new lines to check.
-        return Some(HashSet::new());
+        // Deletion -- fall back to full-file checking. A deletion can expose bugs
+        // (removing a guard clause makes subsequent code reachable, removing an
+        // import makes its uses undefined).
+        return None;
     }
 
     let start_byte = source.find(&edit.new_string)?;
@@ -950,13 +952,15 @@ mod tests {
     }
 
     #[test]
-    fn test_changed_lines_empty_new_string() {
+    fn test_changed_lines_empty_new_string_falls_back() {
         let source = "line1\nline2\n";
         let edit = EditContext {
             new_string: String::new(),
         };
-        let lines = compute_changed_lines(source, &edit).unwrap();
-        assert!(lines.is_empty(), "deletion should yield empty set");
+        assert!(
+            compute_changed_lines(source, &edit).is_none(),
+            "deletion should return None (full-file fallback)"
+        );
     }
 
     #[test]

@@ -625,6 +625,7 @@ import_rules:
     message: "no api imports"
 custom_checks: []
 fix_suggestions: false
+pattern_threshold: 5
 "#;
         let cfg: EckoConfig = serde_yaml::from_str(yaml).unwrap();
 
@@ -652,6 +653,7 @@ fix_suggestions: false
         assert_eq!(cfg.import_rules[0].message, "no api imports");
         assert!(cfg.custom_checks.is_empty());
         assert!(!cfg.fix_suggestions);
+        assert_eq!(cfg.pattern_threshold, 5);
         let allowlist = cfg.builtin_shadow_allowlist.as_ref().unwrap();
         assert_eq!(allowlist.len(), 2);
         assert_eq!(allowlist[0], "type");
