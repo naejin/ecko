@@ -37,16 +37,17 @@ const HARDCODED_PATTERNS: &[(&str, &str)] = &[
     ),
     // Note: Rust regex doesn't support lookaheads, so we handle
     // --force-with-lease exclusion in check_bash_command() logic.
+    // Use `git\b.*\bsubcommand\b` to match regardless of intervening args like `-C /dir`.
     (
-        r"git\s+push\s.*(\s--force(\s|$)|\s-f(\s|$))|git\s+push\s+(--force(\s|$)|-f(\s|$))",
+        r"git\b.*\bpush\b.*(\s--force(\s|$)|\s-f(\s|$))",
         "git push --force can overwrite remote history",
     ),
     (
-        r"git\s+reset\s+--hard",
+        r"git\b.*\breset\s+--hard",
         "git reset --hard permanently discards commits",
     ),
     (
-        r"git\s+clean\s+.*-[^\s]*f",
+        r"git\b.*\bclean\s+.*-[^\s]*f",
         "git clean -f permanently deletes untracked files",
     ),
 ];
@@ -220,6 +221,35 @@ mod tests {
     #[test]
     fn test_allows_git_clean_dry_run() {
         assert!(check("git clean -n").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // git -C prefix bypass
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_blocks_git_c_push_force() {
+        assert!(check("git -C /tmp push --force").is_some());
+        assert!(check("git -C /tmp push -f").is_some());
+    }
+
+    #[test]
+    fn test_blocks_git_c_reset_hard() {
+        assert!(check("git -C /tmp reset --hard").is_some());
+        assert!(check("git -C /tmp reset --hard HEAD~1").is_some());
+    }
+
+    #[test]
+    fn test_blocks_git_c_clean_f() {
+        assert!(check("git -C /tmp clean -fd").is_some());
+        assert!(check("git -C /tmp clean -f").is_some());
+    }
+
+    #[test]
+    fn test_allows_git_c_safe_commands() {
+        assert!(check("git -C /tmp status").is_none());
+        assert!(check("git -C /tmp push").is_none());
+        assert!(check("git -C /tmp push --force-with-lease").is_none());
     }
 
     // -----------------------------------------------------------------------

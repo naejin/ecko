@@ -199,6 +199,8 @@ pub fn explain(check_name: &str) -> String {
         "unicode-artifacts" => "Flags Unicode characters like smart quotes, em dashes, and zero-width spaces in code. These are usually copy-paste artifacts from documentation or chat that break compilation or cause subtle bugs.",
         "dead-code" => "Detects functions, classes, and variables that are defined but never referenced anywhere in the project. Dead code is maintenance burden and confusion.",
         "unused-exports" => "Detects exported symbols in JS/TS modules that are never imported by any other file. Unused exports bloat the API surface and confuse consumers.",
+        "banned-patterns" => "Flags code matching user-configured regex patterns in ecko.yaml. Use this to enforce project-specific rules like banning deprecated APIs or enforcing naming conventions.",
+        "import-layers" => "Enforces import boundaries between layers of your codebase. Configure rules in ecko.yaml to prevent e.g. route handlers from importing database internals directly.",
         _ => return format!("Unknown check '{}'. Use ecko_status to see all available checks.", check_name),
     };
     format!("{}: {}", check_name, explanation)

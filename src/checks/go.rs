@@ -49,12 +49,14 @@ fn check_unused_imports(
     let mut cursor = tree_sitter::QueryCursor::new();
     let path_idx = query_engine::capture_index_or_skip(&query, "path");
     let match_idx = query_engine::capture_index_or_skip(&query, "match");
+    let name_idx = query_engine::capture_index_or_skip(&query, "name");
 
     let mut imports: Vec<(String, usize, usize)> = Vec::new(); // (pkg_name, line, end_byte)
 
     let mut matches = cursor.matches(&query, tree.root_node(), source_bytes);
     while let Some(m) = matches.next() {
         let mut path_text = "";
+        let mut alias_text = "";
         let mut line = 0;
         let mut end = 0;
 
@@ -66,13 +68,30 @@ fn check_unused_imports(
                 line = cap.node.start_position().row + 1;
                 end = cap.node.end_byte();
             }
+            if cap.index as usize == name_idx {
+                alias_text = query_engine::node_text(cap.node, source_bytes);
+            }
         }
 
-        // Extract package name from path: "fmt" -> fmt, "encoding/json" -> json
-        let clean_path = path_text.trim_matches('"');
-        let pkg_name = clean_path.rsplit('/').next().unwrap_or(clean_path);
-        if !pkg_name.is_empty() {
-            imports.push((pkg_name.to_string(), line, end));
+        // Skip blank imports (_ "pkg") -- side-effect only, always intentional
+        if alias_text == "_" {
+            continue;
+        }
+
+        // Use alias name if present, otherwise extract package name from path
+        let effective_name = if !alias_text.is_empty() {
+            alias_text.to_string()
+        } else {
+            let clean_path = path_text.trim_matches('"');
+            clean_path
+                .rsplit('/')
+                .next()
+                .unwrap_or(clean_path)
+                .to_string()
+        };
+
+        if !effective_name.is_empty() {
+            imports.push((effective_name, line, end));
         }
     }
 
@@ -324,5 +343,52 @@ mod tests {
             .filter(|e| e.check == "unreachable-code")
             .collect();
         assert_eq!(unr.len(), 1, "should detect unreachable code: {unr:?}");
+    }
+
+    #[test]
+    fn test_blank_import_not_flagged() {
+        let source = "package main\n\nimport (\n\t\"database/sql\"\n\t_ \"github.com/lib/pq\"\n)\n\nfunc main() {\n\tdb, err := sql.Open(\"postgres\", \"host=localhost\")\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\tdefer db.Close()\n}\n";
+        let config = EckoConfig::default();
+        let echoes = run_checks("main.go", source, &config);
+        let unused: Vec<_> = echoes
+            .iter()
+            .filter(|e| e.check == "unused-imports")
+            .collect();
+        assert!(
+            unused.is_empty(),
+            "blank import should not be flagged: {unused:?}"
+        );
+    }
+
+    #[test]
+    fn test_alias_import_used() {
+        let source = "package main\n\nimport (\n\tj \"encoding/json\"\n\t\"fmt\"\n)\n\nfunc main() {\n\tdata, _ := j.Marshal(map[string]int{\"a\": 1})\n\tfmt.Println(string(data))\n}\n";
+        let config = EckoConfig::default();
+        let echoes = run_checks("main.go", source, &config);
+        let unused: Vec<_> = echoes
+            .iter()
+            .filter(|e| e.check == "unused-imports")
+            .collect();
+        assert!(
+            unused.is_empty(),
+            "alias import in use should not be flagged: {unused:?}"
+        );
+    }
+
+    #[test]
+    fn test_alias_import_unused() {
+        let source = "package main\n\nimport (\n\tj \"encoding/json\"\n\t\"fmt\"\n)\n\nfunc main() {\n\tfmt.Println(\"hello\")\n}\n";
+        let config = EckoConfig::default();
+        let echoes = run_checks("main.go", source, &config);
+        let unused: Vec<_> = echoes
+            .iter()
+            .filter(|e| e.check == "unused-imports")
+            .collect();
+        assert_eq!(
+            unused.len(),
+            1,
+            "unused alias import should be flagged: {unused:?}"
+        );
+        assert!(unused[0].message.contains("j"));
     }
 }

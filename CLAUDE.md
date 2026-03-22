@@ -68,30 +68,20 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `checks/session_stats.py`: standalone script for `/ecko:session` command (prints to stdout, not stderr)
 
 ## Noise reduction (v0.5.0)
-- `builtin-shadowing` (ruff A001/A002): 20-name default allowlist filters idiomatic API params (`type`, `help`, `input`, `format`, `id`, `repr`, `ascii`, etc.). Configurable via `builtin_shadow_allowlist` in ecko.yaml — user list replaces default entirely
-- `var-declarations` / echo avalanches: capped at 5 per check per file (configurable via `echo_cap_per_check`). Overflow summarized as "... and N more"
-- `empty-block-statements` (biome noEmptyBlockStatements): renamed from `empty-error-handlers` to reflect actual scope
-- `empty-error-handlers` (ruff S110): removed from built-in rules in v0.9.1 — E722 (bare-except) catches the dangerous case; `try/except Exception: pass` is a legitimate guard pattern. Re-enable via `ruff_extra_rules: [S110]`
-- `unreachable-code`: yield-after-raise skipped in generators and `@contextmanager` functions (both custom check and vulture adapter)
-- `dead-code` (vulture): dunder-prefix filter (`__n`, `__get__`, etc.), expanded `_ALWAYS_SKIP` (`objtype`, `owner`, `sender`), dynamic pytest fixture collection from conftest.py files
+- `builtin-shadowing`: 20-name default allowlist (`type`, `help`, `input`, `id`, etc.). Configurable via `builtin_shadow_allowlist` -- user list replaces default entirely
+- Echo cap: 5 per check per file (configurable via `echo_cap_per_check`). Overflow summarized as "... and N more"
+- FP-free patterns verified via `validation/` directory -- run `./validation/run.sh` to check all edge cases
 
 ## Trust + safety (v0.5.1)
-- Skipped-tool reporting: when a tool is unavailable, ecko emits `~~ ecko ~~ note: <tool> (not found)` instead of silent nothing
-- Config validation: `validate_config()` warns on unknown keys (with "did you mean?" suggestions) and invalid regex patterns
-- Bash guard expanded: blocks `git push --force`, `git reset --hard`, `git clean -f` in addition to existing patterns
-- ReDoS protection: user-supplied regex in `banned_patterns` and `blocked_commands` runs with thread-based timeout (500ms)
-- Layer 3 runs tools in parallel via `ThreadPoolExecutor` (2-3x speedup)
-- Vulture scoped to modified files only (`run_vulture(cwd, modified_files=...)`)
-- tsc/knip results post-filtered to modified files in runner.py
-- Vulture fixture collection cached per cwd (`_fixture_cache`)
-- Config values `banned` and `obsolete` hoisted before per-file loop in `run_stop()`
-- `encoding="utf-8"` added to all `open()` calls in formatter.py, banned_patterns.py, duplicate_keys.py
+- Skipped-tool reporting: `~~ ecko ~~ note: <tool> (not found)` instead of silent nothing
+- Config validation: `validate_config()` warns on unknown keys (with "did you mean?" suggestions)
+- Bash guard: blocks `git push --force`, `git reset --hard`, `git clean -f` (including `git -C` prefix variants)
+- ReDoS protection: user-supplied regex runs with thread-based timeout (500ms)
+- `encoding="utf-8"` on all `open()` calls (Windows cp1252 safety)
 
-## Known remaining FP patterns (tracked for future work)
-- `builtin-shadowing`: `object`, `print`, `all` intentionally NOT in default allowlist — users can add via config
-- `singleton-comparison` in test files: `== True`/`== False` in test assertions is intentional equality testing
-- Pyright "unknown import symbol": not yet filtered (only "could not be resolved" is filtered)
-- Vulture FastAPI DI params: partially mitigated by `_FRAMEWORK_VULTURE_SKIPS` (fingerprint-driven), but route-specific params like `Depends(get_db)` return values still flagged
+## Known remaining FP patterns
+- Tracked as `boundary/` files in `validation/` repos -- see `validation/python/boundary/singleton_test_assertion.py`, etc.
+- When a new FP pattern is discovered, add it to the appropriate `validation/{lang}/boundary/` file BEFORE fixing
 
 ## Cross-platform gotchas
 - Always `open()` with `encoding="utf-8"` — Windows Python 3.10/3.12 defaults to cp1252, which silently fails on UTF-8 multi-byte chars (e.g. smart quotes contain byte 0x9d, undefined in cp1252)
@@ -141,14 +131,22 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Use temp files for testing checks (e.g., write a .py with unused imports, run runner, verify output)
 - Bash guard: `echo 'COMMAND' | python3 checks/runner.py --mode pre-tool-use-bash --cwd . --plugin-root .` (exit 2 = block, 0 = allow)
 - Test fixtures in `tests/fixtures/` must NOT start with `test_` prefix unless they are intentionally bad test files (conftest.py `collect_ignore_glob` excludes them)
-- Real-world validation: clone repos to `/tmp/`, run checks via `check_test_quality()` or `run_post_tool_use()` directly, assess TP/FP rates
-- Validation results: `docs/ideas/validation-results.md` (52 repos + v0.5.0 release validation)
-- 10-repo validation command: `python3 checks/runner.py --file /tmp/ecko-test-{repo}/{file} --mode post-tool-use --cwd /tmp/ecko-test-{repo} --plugin-root /home/daylon/projects/ecko`
-- 10-repo validation suite: Flask, FastAPI, httpx, Rich, Pydantic, Express, Preact, Zod, Gin, Serde
 - Dry-run smoke test: `python3 checks/runner.py --file <path> --mode dry-run --cwd <dir> --plugin-root .`
 - Stop-mode validation: copy source to tmp dir, `git init` + commit all, modify files (append newline), then run `--mode stop`. Must copy WITHOUT `.git` dir (`shutil.copytree` with `ignore_patterns('.git')`) or nested git confuses `_get_modified_files()`
 - Use parallel subagents for multi-repo validation (5 agents x 2 repos each works well)
-- CI matrix: `{ubuntu, macos, windows} × {Python 3.10, 3.12}` — 6 jobs total (`.github/workflows/test.yml`)
+- CI matrix: `{ubuntu, macos, windows} × {Python 3.10, 3.12}` -- 6 jobs total (`.github/workflows/test.yml`)
+
+## Validation repos (CRITICAL -- always keep up to date)
+- **Every FP fixed or missed TP discovered MUST be added to `validation/` before the fix is considered complete.** This is the single most important testing practice.
+- Committed at `validation/{python,typescript,go,rust}/` with `bad/`, `clean/`, `boundary/` per language
+- Run all: `./validation/run.sh` -- run one: `./validation/run.sh python`
+- Each file has a header comment with expected exit code and check name
+- `bad/` files: MUST trigger exit 1 + expected check name (TP targets)
+- `clean/` files: MUST produce exit 0 (FP guards -- the most important files)
+- `boundary/` files: edge cases with documented expected outcomes (known limitations)
+- When fixing a FP: add the triggering pattern to `clean/` FIRST, verify it fails, fix the check, verify it passes
+- When fixing a missed TP: add the pattern to `bad/` FIRST, verify it doesn't trigger, fix the check, verify it triggers
+- Self-check: all ecko source files (`src/**/*.rs`) must produce 0 echoes
 
 ## Releasing
 - Bump `version` in both `.claude-plugin/plugin.json` AND `Cargo.toml`
@@ -163,7 +161,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Verify with: `curl -fsSL https://github.com/naejin/ecko/releases/latest/download/install.sh | bash`
 - Update `commands/` listing in Structure section of CLAUDE.md if adding/removing commands
 - Update commands table in README.md if adding/removing commands
-- CHANGELOG test count must match actual `cargo test` output (currently 283)
+- CHANGELOG test count must match actual `cargo test` output (currently 299)
 - Update test count in both CHANGELOG.md AND CLAUDE.md after final stabilization, not after initial implementation (review rounds add tests)
 - Update README.md checks tables when adding new checks
 
@@ -246,6 +244,8 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - LANG_MAP extended: `.go` → `"go"`, `.rs` → `"rust"`
 - Both use `resolve_binary_tool()` (not `shutil.which` directly)
 - Severity mapped from tool output: golangci `Severity` field, clippy `level` field
+- Go blank imports (`_ "pkg"`): skip in unused-imports. Alias imports: use alias name, not path segment
+- Edge cases verified in `validation/go/clean/` (blank imports, alias imports, nil guards)
 
 ## Fingerprinting + dry-run (v1.3)
 - `checks/fingerprint.py`: detects Django, Flask, FastAPI, Express, Next.js, React, Vue from requirements.txt/pyproject.toml/package.json
@@ -254,7 +254,8 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `run_dry_run()` in runner.py, outputs to stdout (informational, not a hook)
 
 ## Current version and next milestone
-- Current: v2.0.0 (Rust rewrite with tree-sitter + MCP server)
+- Current: v2.1.0 (validation suite, FP fixes, Go alias/blank imports, guard hardening)
+- Previous: v2.0.0 (Rust rewrite with tree-sitter + MCP server)
 - Previous: v1.3.0 (Python, fingerprinting + dry-run)
 
 ## Not part of the plugin
@@ -287,7 +288,7 @@ The Python code in `checks/` still exists but hooks now point to the Rust binary
 - `src/fix.rs` — fix suggestion generation (byte-range replacements)
 - `src/fingerprint.rs` — framework detection from dependency files
 - `src/formatter.rs` — Layer 1 autofix (trailing whitespace + optional black/prettier)
-- `src/suppress.rs` — `ecko:ignore` inline comment suppression
+- `src/suppress.rs` — `ecko:ignore` inline comment suppression; supports both space-separated (`# ecko:ignore unused-imports`) and bracket notation (`# ecko:ignore[unused-imports]`)
 - `src/debug.rs` — `ECKO_DEBUG=1` stderr output via `OnceLock`
 - `queries/` — tree-sitter `.scm` files embedded at compile time via `include_str!()`
 - `.claude-plugin/.mcp.json` — MCP server config for Claude Code
@@ -328,6 +329,7 @@ The Python code in `checks/` still exists but hooks now point to the Rust binary
 - Session stats only emitted when ledger has entries (silent on first run)
 - All output goes to stderr via `echo::emit()` — stdout only for dry-run/informational modes
 - `--force-with-lease --force` bypass: strip `--force-with-lease` then check for standalone `--force`
+- Guard regex patterns for git subcommands use `git\b.*\bsubcommand` (not `git\s+subcommand`) to match regardless of intervening args like `-C /dir`
 
 ## Rust check inventory (28 native checks)
 - Python (12): unused-imports, singleton-comparison, bare-except, star-imports, mutable-default-args, builtin-shadowing, placeholder-code, unreachable-code, duplicate-keys, test-conditional, fixed-wait, mock-spec-bypass
@@ -342,7 +344,7 @@ The Python code in `checks/` still exists but hooks now point to the Rust binary
 2. Add check function in `src/checks/<lang>.rs` using `parse_for_checks()` + `compile_query()` + `capture_index_or_skip()`
 3. Wire into `run_checks()` in that module
 4. Add check name to `list_applicable_checks()` in `src/checks/mod.rs`
-5. Add check name to `mcp/tools.rs` `status()` and `explain()` functions
+5. Add check name to `mcp/tools.rs` `status()` and `explain()` functions -- EVERY check in `list_applicable_checks()` must have an explain entry
 6. Add unit test with inline source string
 
 ## Rust v2 config changes (vs Python v1)
@@ -355,6 +357,10 @@ The Python code in `checks/` still exists but hooks now point to the Rust binary
 - Diff-aware checking (only check changed subtrees)
 
 ## Rust code quality gotchas
+- Rust unused-imports: check usage per-import across entire file (before AND after), not just after last import -- `#[cfg(test)]` modules push `import_end` past main code
+- Rust unreachable-code: skip `line_comment`/`block_comment` nodes -- tree-sitter parses them as named block children
+- Rust trait imports: `TRAIT_IMPORTS` allowlist in `rust_checks.rs` -- add new traits as needed
+- Edge cases verified in `validation/rust/clean/` (derive macros, trait imports, test modules, comments after return)
 - AI agents insert unicode (em dashes, arrows) in doc comments -- always `sed -i 's/\xe2\x80\x94/--/g'` after bulk code generation
 - `relative_path()` lives in `git.rs` -- single source of truth, never duplicate in other modules
 - `canonicalize_or_normalize()` lives in `git.rs` -- shared by clippy and golangci adapters for path matching, never duplicate

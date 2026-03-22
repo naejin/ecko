@@ -83,7 +83,9 @@ fn extract_ecko_ignore(line: &str) -> Option<String> {
 
 /// Parse check names from the text after `ecko:ignore`.
 ///
-/// E.g., `" unused-imports, bare-except"` -> `["unused-imports", "bare-except"]`
+/// Supports both space-separated and bracket notation:
+///   `" unused-imports, bare-except"` -> `["unused-imports", "bare-except"]`
+///   `"[unused-imports, bare-except]"` -> `["unused-imports", "bare-except"]`
 /// Empty/whitespace-only -> empty vec (suppress all).
 fn parse_check_names(directive: &str) -> Vec<String> {
     let trimmed = directive.trim();
@@ -91,7 +93,17 @@ fn parse_check_names(directive: &str) -> Vec<String> {
         return Vec::new();
     }
 
-    trimmed
+    // Strip bracket notation: [check1, check2]
+    let inner = if trimmed.starts_with('[') {
+        trimmed
+            .strip_prefix('[')
+            .and_then(|s| s.strip_suffix(']'))
+            .unwrap_or(trimmed.trim_start_matches('['))
+    } else {
+        trimmed
+    };
+
+    inner
         .split(',')
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -181,6 +193,42 @@ mod tests {
         assert_eq!(suppressions.len(), 1);
         assert_eq!(suppressions[0].line, 2);
         assert_eq!(suppressions[0].checks, vec!["star-imports"]);
+    }
+
+    #[test]
+    fn test_bracket_notation_single() {
+        let lines = vec!["x = 1  # ecko:ignore[unused-imports]"];
+        let suppressions = parse_suppressions(&lines);
+        assert_eq!(suppressions.len(), 1);
+        assert_eq!(suppressions[0].checks, vec!["unused-imports"]);
+    }
+
+    #[test]
+    fn test_bracket_notation_multiple() {
+        let lines = vec!["x = 1  # ecko:ignore[unused-imports, bare-except]"];
+        let suppressions = parse_suppressions(&lines);
+        assert_eq!(suppressions.len(), 1);
+        assert_eq!(
+            suppressions[0].checks,
+            vec!["unused-imports", "bare-except"]
+        );
+    }
+
+    #[test]
+    fn test_bracket_notation_standalone() {
+        let lines = vec!["# ecko:ignore[duplicate-keys]", "d = {'a': 1, 'a': 2}"];
+        let suppressions = parse_suppressions(&lines);
+        assert_eq!(suppressions.len(), 1);
+        assert_eq!(suppressions[0].line, 2);
+        assert_eq!(suppressions[0].checks, vec!["duplicate-keys"]);
+    }
+
+    #[test]
+    fn test_bracket_notation_js_comment() {
+        let lines = vec!["const x = 1; // ecko:ignore[no-var]"];
+        let suppressions = parse_suppressions(&lines);
+        assert_eq!(suppressions.len(), 1);
+        assert_eq!(suppressions[0].checks, vec!["no-var"]);
     }
 
     #[test]

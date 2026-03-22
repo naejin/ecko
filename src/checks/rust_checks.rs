@@ -13,6 +13,21 @@ use crate::query_engine;
 const TODO_MACRO_QUERY: &str = include_str!("../../queries/rust/todo_macro.scm");
 const UNUSED_IMPORTS_QUERY: &str = include_str!("../../queries/rust/unused_imports.scm");
 
+/// Traits commonly imported for their methods but never referenced by name.
+/// Tree-sitter can't resolve trait method dispatch, so these are always FPs.
+const TRAIT_IMPORTS: &[&str] = &[
+    // std traits used via method calls
+    "Read", "Write", "Display", "Debug", "Iterator", "IntoIterator",
+    "FromStr", "Into", "From", "TryFrom", "TryInto", "AsRef", "AsMut",
+    "Deref", "DerefMut", "Clone", "Default", "Drop",
+    "Hash", "Eq", "Ord", "PartialEq", "PartialOrd",
+    "Send", "Sync", "Unpin", "Sized",
+    // async traits
+    "Future", "Stream", "Sink",
+    // common external crate traits
+    "StreamingIterator", "Serialize", "Deserialize",
+];
+
 pub fn run_checks(_file_path: &str, source: &str, _config: &EckoConfig) -> Vec<Echo> {
     let (ts_lang, tree) = match lang::parse_for_checks(Lang::Rust, source) {
         Some(v) => v,
@@ -65,7 +80,7 @@ fn check_unused_imports(
                 // Navigate to the argument (scoped_identifier), get the last name
                 if let Some(arg) = node.child_by_field_name("argument") {
                     let name = extract_use_name(arg, source_bytes);
-                    if !name.is_empty() {
+                    if !name.is_empty() && !TRAIT_IMPORTS.contains(&name.as_str()) {
                         imports.push((name, line, start, end));
                     }
                 }
@@ -73,20 +88,18 @@ fn check_unused_imports(
         }
     }
 
-    // Find end of all use declarations
-    let import_end = imports.iter().map(|(_, _, _, end)| *end).max().unwrap_or(0);
-    let code_after = if import_end < source.len() {
-        &source[import_end..]
-    } else {
-        ""
-    };
-
     let mut echoes = Vec::new();
-    for (name, line, _start, _end) in &imports {
-        // Check if the name appears in code after imports
-        // Look for name as a standalone identifier (preceded/followed by non-alphanumeric)
-        let pattern = name.to_string();
-        let used = code_after.contains(&pattern);
+    for (name, line, start, end) in &imports {
+        // Check if the name appears anywhere in the file outside its own import statement.
+        // We check both before and after the import to handle test module imports
+        // that appear after the main code, and derive macros between imports.
+        let before = &source[..*start];
+        let after = if *end < source.len() {
+            &source[*end..]
+        } else {
+            ""
+        };
+        let used = name_used_in(before, name) || name_used_in(after, name);
         if !used {
             echoes.push(Echo {
                 check: "unused-imports".to_string(),
@@ -100,6 +113,52 @@ fn check_unused_imports(
     }
 
     echoes
+}
+
+/// Check if `name` appears as a used identifier in `text`.
+///
+/// Searches line-by-line, skipping `use` declaration lines (to avoid matching
+/// the same name inside other import paths like `std::io` in `use std::io::Write`).
+/// Uses word-boundary checks to avoid substring matches inside longer identifiers.
+fn name_used_in(text: &str, name: &str) -> bool {
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        // Skip use declarations -- these are imports, not usage.
+        if trimmed.starts_with("use ") {
+            continue;
+        }
+        if line_has_word(line, name) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Check if `name` appears as a standalone word in `line`.
+///
+/// A "word" is bounded by non-alphanumeric, non-underscore characters.
+fn line_has_word(line: &str, name: &str) -> bool {
+    let name_bytes = name.as_bytes();
+    let line_bytes = line.as_bytes();
+    if name_bytes.len() > line_bytes.len() {
+        return false;
+    }
+    for (i, window) in line_bytes.windows(name_bytes.len()).enumerate() {
+        if window != name_bytes {
+            continue;
+        }
+        let before_ok = i == 0 || !is_ident_char(line_bytes[i - 1]);
+        let after_ok = i + name_bytes.len() >= line_bytes.len()
+            || !is_ident_char(line_bytes[i + name_bytes.len()]);
+        if before_ok && after_ok {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_ident_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
 }
 
 /// Extract the last name from a use declaration argument.
@@ -196,6 +255,10 @@ fn find_unreachable(node: tree_sitter::Node, echoes: &mut Vec<Echo>) {
         let mut found_terminal = false;
         let mut cursor = node.walk();
         for stmt in node.named_children(&mut cursor) {
+            // Skip comments -- they are not executable code.
+            if stmt.kind() == "line_comment" || stmt.kind() == "block_comment" {
+                continue;
+            }
             if found_terminal {
                 echoes.push(Echo {
                     check: "unreachable-code".to_string(),
@@ -310,6 +373,53 @@ mod tests {
     }
 
     #[test]
+    fn test_trait_import_not_flagged() {
+        // Trait imports used implicitly via method calls should be skipped.
+        let source =
+            "use std::io::Write;\n\nfn main() {\n    let mut f = std::fs::File::create(\"x\").unwrap();\n    f.write_all(b\"hello\").unwrap();\n}\n";
+        let config = EckoConfig::default();
+        let echoes = run_checks("main.rs", source, &config);
+        let unused: Vec<_> = echoes
+            .iter()
+            .filter(|e| e.check == "unused-imports")
+            .collect();
+        assert!(
+            unused.is_empty(),
+            "Write is a trait import (allowlisted): {unused:?}"
+        );
+    }
+
+    #[test]
+    fn test_derive_macro_not_flagged() {
+        let source = "use serde::Deserialize;\n\n#[derive(Debug, Deserialize, Clone)]\npub struct Config {\n    pub name: String,\n}\n";
+        let config = EckoConfig::default();
+        let echoes = run_checks("main.rs", source, &config);
+        let unused: Vec<_> = echoes
+            .iter()
+            .filter(|e| e.check == "unused-imports")
+            .collect();
+        assert!(
+            unused.is_empty(),
+            "Deserialize used via derive should not be flagged: {unused:?}"
+        );
+    }
+
+    #[test]
+    fn test_import_used_before_test_module_import() {
+        // Simulates: main code uses `config::load_config()`, test module has its own imports
+        let source = "use crate::config;\nuse std::io;\n\nfn main() {\n    config::load_config();\n}\n\n#[cfg(test)]\nmod tests {\n    use std::io::Write;\n    fn t() { let _ = Write; }\n}\n";
+        let config = EckoConfig::default();
+        let echoes = run_checks("main.rs", source, &config);
+        let unused: Vec<_> = echoes
+            .iter()
+            .filter(|e| e.check == "unused-imports")
+            .collect();
+        // `io` is unused, `config` is used -- only `io` should be flagged
+        assert_eq!(unused.len(), 1, "only `io` unused: {unused:?}");
+        assert!(unused[0].message.contains("io"));
+    }
+
+    #[test]
     fn test_todo_macro() {
         let source = "fn foo() {\n    todo!();\n}\n";
         let config = EckoConfig::default();
@@ -346,6 +456,22 @@ mod tests {
             .filter(|e| e.check == "unreachable-code")
             .collect();
         assert_eq!(unr.len(), 1, "should detect unreachable: {unr:?}");
+    }
+
+    #[test]
+    fn test_comment_after_return_not_unreachable() {
+        // `return; // comment` in an if body -- the comment is not executable code
+        let source = "fn f(cwd: &str) {\n    if cwd.is_empty() {\n        return; // skip\n    }\n    println!(\"ok\");\n}\n";
+        let config = EckoConfig::default();
+        let echoes = run_checks("main.rs", source, &config);
+        let unr: Vec<_> = echoes
+            .iter()
+            .filter(|e| e.check == "unreachable-code")
+            .collect();
+        assert!(
+            unr.is_empty(),
+            "comment after return in if body is not unreachable: {unr:?}"
+        );
     }
 
     #[test]

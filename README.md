@@ -1,6 +1,6 @@
 # ecko
 
-[![v2.0.0](https://img.shields.io/badge/version-2.0.0-blue)](https://github.com/naejin/ecko/releases/tag/v2.0.0)
+[![v2.1.0](https://img.shields.io/badge/version-2.0.0-blue)](https://github.com/naejin/ecko/releases/tag/v2.1.0)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-plugin-7c3aed)](https://docs.anthropic.com/en/docs/claude-code)
 [![Rust](https://img.shields.io/badge/rust-native-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![TypeScript](https://img.shields.io/badge/typescript-supported-3178c6?logo=typescript&logoColor=white)](https://typescriptlang.org)
@@ -66,7 +66,8 @@ Ecko hooks into four moments in a Claude Code session:
 |  Bash guard (PreToolUse)                    |
 |  Blocks: --no-verify, rm -rf /, rm -rf ~,  |
 |  git push --force, git reset --hard,        |
-|  git clean -f + user blocked_commands.      |
+|  git clean -f (including git -C variants)   |
+|  + user blocked_commands.                   |
 |  Agent never executes the command.          |
 +---------------------------------------------+
 ```
@@ -162,6 +163,7 @@ All 28 core checks are native -- powered by tree-sitter, with zero external depe
 | Check | What it catches |
 |-------|-----------------|
 | `dead-code` | Unused functions, classes, variables (native analysis) |
+| `unused-exports` | Exported symbols never imported by other files (JS/TS) |
 
 ### External Adapters (optional)
 

@@ -1751,12 +1751,18 @@ fn find_mock_assigns(
         ) {
             continue;
         }
-        let assign = if node.kind() == "expression_statement" {
-            first_named_child(node).filter(|c| c.kind() == "assignment")
+        // Extract assignment from expression_statement wrapper or standalone.
+        // When an expression_statement contains an assignment, skip its children
+        // to avoid processing the same assignment twice (once here, once standalone).
+        let (assign, skip_children) = if node.kind() == "expression_statement" {
+            (
+                first_named_child(node).filter(|c| c.kind() == "assignment"),
+                true,
+            )
         } else if node.kind() == "assignment" {
-            Some(node)
+            (Some(node), true)
         } else {
-            None
+            (None, false)
         };
         if let Some(a) = assign {
             if let Some(t) = a.child_by_field_name("left") {
@@ -1779,6 +1785,9 @@ fn find_mock_assigns(
                         }
                     }
                 }
+            }
+            if skip_children {
+                continue;
             }
         }
         for i in 0..node.child_count() {
@@ -2451,6 +2460,24 @@ mod tests {
                 ),
                 "mock-spec-bypass"
             ) > 0
+        );
+    }
+    #[test]
+    fn no_duplicate_echoes() {
+        // Each assignment should produce exactly one echo, not two.
+        let echoes = run_checks(
+            "test_f.py",
+            "def test_f():\n    m = Mock(spec=Foo)\n    m.bad_attr = 1\n    m.other_bad = 2\n",
+            &cfg(),
+        );
+        let mock_echoes: Vec<_> = echoes
+            .iter()
+            .filter(|e| e.check == "mock-spec-bypass")
+            .collect();
+        assert_eq!(
+            mock_echoes.len(),
+            2,
+            "expected exactly 2 echoes (one per assignment), got: {mock_echoes:?}"
         );
     }
 }

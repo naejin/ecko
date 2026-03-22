@@ -1,5 +1,42 @@
 # Changelog
 
+## v2.1.0
+
+Correctness -- 0 false positives across 69 validation fixtures in 4 languages.
+
+### Bug fixes
+
+- **`ecko:ignore[check]` bracket notation** -- `# ecko:ignore[unused-imports]` now works
+  (previously only space-separated format `# ecko:ignore unused-imports` was supported).
+- **Rust unused-imports: test module FP** -- imports in `#[cfg(test)] mod tests` no longer
+  cause main-code imports to appear unused. Check now searches entire file per-import with
+  word-boundary matching.
+- **Rust unreachable-code: comment FP** -- `return; // comment` no longer flags the comment
+  as unreachable code (tree-sitter `line_comment`/`block_comment` nodes now skipped).
+- **Rust trait imports FP** -- `use std::io::Write` and similar trait imports used implicitly
+  via method calls are no longer flagged. `TRAIT_IMPORTS` allowlist in `rust_checks.rs`.
+- **Go blank imports FP** -- `_ "database/sql/driver"` side-effect imports no longer flagged.
+- **Go alias imports FP** -- `import j "encoding/json"` now correctly uses the alias `j` for
+  usage detection instead of the path segment `json`.
+- **`git -C` guard bypass** -- `git -C /dir push --force`, `git -C /dir reset --hard`, and
+  `git -C /dir clean -f` are now blocked (patterns use `git\b.*\bsubcommand`).
+- **mock-spec-bypass duplicate echoes** -- each attribute assignment now produces exactly one
+  echo instead of two (BFS child-push skip after processing assignment).
+- **`ecko_explain` missing checks** -- `banned-patterns` and `import-layers` now have
+  explain entries.
+
+### New features
+
+- **Validation suite** -- `validation/` directory with 69 fixture files across Python (27),
+  TypeScript (17), Go (12), Rust (13). Run `./validation/run.sh` to verify 0 FP / max TP.
+  - `bad/` files: known issues that MUST trigger echoes (TP targets)
+  - `clean/` files: idiomatic code that MUST produce 0 echoes (FP guards)
+  - `boundary/` files: edge cases with documented expected outcomes
+
+### Tests
+
+- 299 Rust unit tests (~0.9s) + 69 validation fixtures.
+
 ## v2.0.0
 
 Complete rewrite -- Rust + tree-sitter replaces the Python + external-tool architecture.
