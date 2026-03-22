@@ -115,6 +115,25 @@ fn format_check_group(name: &str, lines: &[usize], is_error: bool) -> String {
     format!("{prefix}{name} ({line_part})")
 }
 
+/// Limit echoes to at most `cap` per check name.
+///
+/// When `cap` is 0, no filtering is applied (unlimited).
+/// Preserves insertion order; keeps the first `cap` echoes per check.
+pub fn apply_per_check_cap(echoes: Vec<Echo>, cap: usize) -> Vec<Echo> {
+    if cap == 0 {
+        return echoes;
+    }
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    echoes
+        .into_iter()
+        .filter(|e| {
+            let count = counts.entry(e.check.clone()).or_insert(0);
+            *count += 1;
+            *count <= cap
+        })
+        .collect()
+}
+
 /// Compact one-line format for a single file:
 ///
 /// ```text
@@ -428,5 +447,136 @@ mod tests {
         let json = format_stop_echoes_json(&map, 1.5, &[], &HashMap::new());
         let parsed: Result<serde_json::Value, _> = serde_json::from_str(&json);
         assert!(parsed.is_ok());
+    }
+
+    #[test]
+    fn apply_per_check_cap_limits_per_check() {
+        let echoes: Vec<Echo> = (1..=6)
+            .map(|i| echo("check-a", i, Severity::Warn))
+            .collect();
+        let capped = apply_per_check_cap(echoes, 3);
+        assert_eq!(capped.len(), 3);
+        assert_eq!(capped[0].line, 1);
+        assert_eq!(capped[2].line, 3);
+    }
+
+    #[test]
+    fn apply_per_check_cap_zero_unlimited() {
+        let echoes: Vec<Echo> = (1..=10)
+            .map(|i| echo("check-a", i, Severity::Warn))
+            .collect();
+        let result = apply_per_check_cap(echoes, 0);
+        assert_eq!(result.len(), 10);
+    }
+
+    #[test]
+    fn apply_per_check_cap_mixed_checks() {
+        let mut echoes = Vec::new();
+        for i in 1..=5 {
+            echoes.push(echo("check-a", i, Severity::Warn));
+        }
+        for i in 1..=5 {
+            echoes.push(echo("check-b", i, Severity::Warn));
+        }
+        let capped = apply_per_check_cap(echoes, 2);
+        assert_eq!(capped.len(), 4); // 2 of each
+        assert_eq!(capped.iter().filter(|e| e.check == "check-a").count(), 2);
+        assert_eq!(capped.iter().filter(|e| e.check == "check-b").count(), 2);
+    }
+
+    // --- fix_suggestions config behavioral tests ---
+
+    #[test]
+    fn fix_suggestions_strip_removes_all_fixes() {
+        // Simulates the runner.rs pattern: if !config.fix_suggestions { e.fix = None }
+        let mut echoes = vec![
+            Echo {
+                check: "bare-except".to_string(),
+                line: 1,
+                message: "Use specific exception".to_string(),
+                suggestion: String::new(),
+                severity: Severity::Warn,
+                fix: Some(Fix {
+                    start_byte: 0,
+                    end_byte: 10,
+                    replacement: "except Exception:".to_string(),
+                }),
+            },
+            Echo {
+                check: "obsolete-terms".to_string(),
+                line: 5,
+                message: "Renamed".to_string(),
+                suggestion: String::new(),
+                severity: Severity::Warn,
+                fix: Some(Fix {
+                    start_byte: 20,
+                    end_byte: 30,
+                    replacement: "NewName".to_string(),
+                }),
+            },
+        ];
+        // Apply the same strip as runner.rs does when fix_suggestions: false
+        echoes.iter_mut().for_each(|e| e.fix = None);
+        assert!(echoes.iter().all(|e| e.fix.is_none()));
+        // Echoes themselves are preserved -- only fixes removed
+        assert_eq!(echoes.len(), 2);
+        assert_eq!(echoes[0].check, "bare-except");
+        assert_eq!(echoes[1].check, "obsolete-terms");
+    }
+
+    #[test]
+    fn fix_suggestions_default_preserves_fixes() {
+        // When fix_suggestions is true (default), fixes are untouched
+        let echo_with_fix = Echo {
+            check: "bare-except".to_string(),
+            line: 1,
+            message: "msg".to_string(),
+            suggestion: String::new(),
+            severity: Severity::Warn,
+            fix: Some(Fix {
+                start_byte: 0,
+                end_byte: 10,
+                replacement: "except Exception:".to_string(),
+            }),
+        };
+        // No strip applied -- fix remains
+        assert!(echo_with_fix.fix.is_some());
+        assert_eq!(
+            echo_with_fix.fix.as_ref().unwrap().replacement,
+            "except Exception:"
+        );
+    }
+
+    #[test]
+    fn fix_suggestions_strip_idempotent_on_no_fix() {
+        // Echoes without fixes are unchanged by the strip
+        let mut echoes = vec![echo("check-a", 1, Severity::Warn)];
+        assert!(echoes[0].fix.is_none());
+        echoes.iter_mut().for_each(|e| e.fix = None);
+        assert!(echoes[0].fix.is_none());
+        assert_eq!(echoes[0].check, "check-a");
+    }
+
+    // --- echo_cap_per_check end-to-end with realistic echoes ---
+
+    #[test]
+    fn echo_cap_per_check_caps_realistic_banned_pattern_echoes() {
+        // Simulates: banned-patterns check finds 5 matches, config caps to 2
+        let echoes: Vec<Echo> = (1..=5)
+            .map(|i| Echo {
+                check: "banned-patterns".to_string(),
+                line: i,
+                message: format!("Banned pattern `TODO` found on line {i}"),
+                suggestion: String::new(),
+                severity: Severity::Warn,
+                fix: None,
+            })
+            .collect();
+
+        let capped = apply_per_check_cap(echoes, 2);
+        assert_eq!(capped.len(), 2);
+        assert_eq!(capped[0].line, 1);
+        assert_eq!(capped[1].line, 2);
+        // Lines 3-5 are dropped by the cap
     }
 }

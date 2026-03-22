@@ -3,7 +3,7 @@
 //! 8 checks total:
 //! - debugger-statement (error): leftover debugger statements
 //! - no-var (warn): use let/const instead of var
-//! - unused-imports (warn): imported names not referenced in source
+//! - unused-imports (warn): imported names (ESM + CJS require) not referenced in source
 //! - unreachable-code (warn): statements after return/throw/break/continue
 //! - duplicate-keys (warn): repeated property keys in object literals
 //! - empty-block-statements (warn): catch clauses with empty bodies
@@ -183,12 +183,122 @@ fn collect_imported_names<'a>(
     names
 }
 
+/// Check if a node is a `require('...')` call expression.
+fn is_require_call(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() != "call_expression" {
+        return false;
+    }
+    if let Some(func) = node.child_by_field_name("function") {
+        if func.kind() == "identifier" {
+            return query_engine::node_text(func, source) == "require";
+        }
+    }
+    false
+}
+
+/// Collect CJS `require()` imports from variable declarations.
+///
+/// Handles:
+/// - `const X = require('mod')`            -> ["X"]
+/// - `const { X, Y } = require('mod')`     -> ["X", "Y"]
+/// - `const { X: alias } = require('mod')` -> ["alias"]
+/// - `let X = require('mod')`              -> ["X"]
+/// - `var X = require('mod')`              -> ["X"]
+fn collect_require_imports(
+    tree: &tree_sitter::Tree,
+    source: &[u8],
+) -> Vec<(String, usize, usize, usize)> {
+    let mut imports = Vec::new();
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+
+    for child in root.named_children(&mut cursor) {
+        let kind = child.kind();
+        // lexical_declaration (const/let) or variable_declaration (var)
+        if kind != "lexical_declaration" && kind != "variable_declaration" {
+            continue;
+        }
+
+        let decl_start = child.start_byte();
+        let decl_end = child.end_byte();
+
+        // Walk variable_declarator children
+        let mut decl_cursor = child.walk();
+        for declarator in child.named_children(&mut decl_cursor) {
+            if declarator.kind() != "variable_declarator" {
+                continue;
+            }
+
+            // Check if value is a require() call
+            let value = match declarator.child_by_field_name("value") {
+                Some(v) => v,
+                None => continue,
+            };
+
+            if !is_require_call(value, source) {
+                continue;
+            }
+
+            // Extract names from the declarator's name field
+            let name_node = match declarator.child_by_field_name("name") {
+                Some(n) => n,
+                None => continue,
+            };
+
+            match name_node.kind() {
+                "identifier" => {
+                    let name = query_engine::node_text(name_node, source);
+                    imports.push((
+                        name.to_string(),
+                        name_node.start_position().row + 1,
+                        decl_start,
+                        decl_end,
+                    ));
+                }
+                "object_pattern" => {
+                    // Destructured: const { X, Y } = require('mod')
+                    let mut pat_cursor = name_node.walk();
+                    for prop in name_node.named_children(&mut pat_cursor) {
+                        match prop.kind() {
+                            "shorthand_property_identifier_pattern" => {
+                                let name = query_engine::node_text(prop, source);
+                                imports.push((
+                                    name.to_string(),
+                                    prop.start_position().row + 1,
+                                    decl_start,
+                                    decl_end,
+                                ));
+                            }
+                            "pair_pattern" => {
+                                // { x: alias } -> alias is the local name
+                                if let Some(val) = prop.child_by_field_name("value") {
+                                    let name = query_engine::node_text(val, source);
+                                    imports.push((
+                                        name.to_string(),
+                                        val.start_position().row + 1,
+                                        decl_start,
+                                        decl_end,
+                                    ));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    imports
+}
+
 /// Check for imported names that are never referenced in the source.
 ///
-/// Strategy: collect all imported names from import_clause nodes, then
-/// scan the full source text for each name. A name is "used" if it appears
-/// anywhere outside import statements. This is a heuristic (not scope-aware)
-/// but catches the common case.
+/// Strategy: collect all imported names from ESM import_clause nodes and CJS
+/// `require()` variable declarations, then scan the full source text for each
+/// name. A name is "used" if it appears anywhere outside import/require
+/// statements. This is a heuristic (not scope-aware) but catches the common case.
 fn check_unused_imports(
     ts_lang: &tree_sitter::Language,
     tree: &tree_sitter::Tree,
@@ -232,11 +342,14 @@ fn check_unused_imports(
         }
     }
 
+    // --- CJS require() imports ---
+    imported.extend(collect_require_imports(tree, source_bytes));
+
     if imported.is_empty() {
         return Vec::new();
     }
 
-    // Build a set of all import statement byte ranges
+    // Build a set of all import/require statement byte ranges
     let import_ranges: Vec<(usize, usize)> = imported
         .iter()
         .map(|(_, _, start, end)| (*start, *end))
@@ -869,6 +982,100 @@ mod tests {
         // React is unused, useState is used
         assert_eq!(count(&echoes, "unused-imports"), 1);
         assert!(echoes.iter().any(|e| e.message.contains("React")));
+    }
+
+    // =======================================================================
+    // unused-imports (CJS require)
+    // =======================================================================
+
+    #[test]
+    fn test_cjs_require_unused() {
+        let source = "const axios = require(\"axios\");\nconst x = 1;\nmodule.exports = x;\n";
+        let echoes = check_js(source);
+        assert_eq!(count(&echoes, "unused-imports"), 1);
+        assert!(echoes.iter().any(|e| e.message.contains("axios")));
+    }
+
+    #[test]
+    fn test_cjs_require_used() {
+        let source =
+            "const fs = require(\"fs\");\nconst data = fs.readFileSync(\"file.txt\");\nmodule.exports = data;\n";
+        let echoes = check_js(source);
+        assert_eq!(count(&echoes, "unused-imports"), 0);
+    }
+
+    #[test]
+    fn test_cjs_require_destructured_partial_use() {
+        let source = "const { useState, useEffect } = require(\"react\");\nfunction App() { return useState(0); }\n";
+        let echoes = check_js(source);
+        // useEffect is unused, useState is used
+        assert_eq!(count(&echoes, "unused-imports"), 1);
+        assert!(echoes.iter().any(|e| e.message.contains("useEffect")));
+    }
+
+    #[test]
+    fn test_cjs_require_destructured_all_used() {
+        let source = "const { readFileSync, writeFileSync } = require(\"fs\");\nconst data = readFileSync(\"in.txt\");\nwriteFileSync(\"out.txt\", data);\n";
+        let echoes = check_js(source);
+        assert_eq!(count(&echoes, "unused-imports"), 0);
+    }
+
+    #[test]
+    fn test_cjs_require_aliased_destructure() {
+        let source = "const { x: renamed } = require(\"foo\");\nconsole.log(renamed);\n";
+        let echoes = check_js(source);
+        // renamed is used via alias
+        assert_eq!(count(&echoes, "unused-imports"), 0);
+    }
+
+    #[test]
+    fn test_cjs_require_aliased_destructure_unused() {
+        let source = "const { x: renamed } = require(\"foo\");\nconsole.log('hello');\n";
+        let echoes = check_js(source);
+        assert_eq!(count(&echoes, "unused-imports"), 1);
+        assert!(echoes.iter().any(|e| e.message.contains("renamed")));
+    }
+
+    #[test]
+    fn test_cjs_require_var_unused() {
+        let source = "var old = require(\"lodash\");\nconsole.log('hello');\n";
+        let echoes = check_js(source);
+        assert_eq!(count(&echoes, "unused-imports"), 1);
+        assert!(echoes.iter().any(|e| e.message.contains("old")));
+    }
+
+    #[test]
+    fn test_cjs_require_let_unused() {
+        let source = "let helper = require(\"./utils\");\nconsole.log('hello');\n";
+        let echoes = check_js(source);
+        assert_eq!(count(&echoes, "unused-imports"), 1);
+        assert!(echoes.iter().any(|e| e.message.contains("helper")));
+    }
+
+    #[test]
+    fn test_cjs_require_mixed_with_esm() {
+        let source = "import lodash from \"lodash\";\nconst axios = require(\"axios\");\nconst result = lodash.merge({}, {});\nmodule.exports = result;\n";
+        let echoes = check_js(source);
+        // axios is unused (CJS), lodash is used (ESM)
+        assert_eq!(count(&echoes, "unused-imports"), 1);
+        assert!(echoes.iter().any(|e| e.message.contains("axios")));
+    }
+
+    #[test]
+    fn test_cjs_require_member_access_not_import() {
+        // `require("foo").bar` is not a simple require import -- skip it
+        let source = "const bar = require(\"foo\").bar;\nconsole.log('hello');\n";
+        let echoes = check_js(source);
+        // bar is a normal variable, not detected as a require import
+        assert_eq!(count(&echoes, "unused-imports"), 0);
+    }
+
+    #[test]
+    fn test_cjs_bare_require_no_false_positive() {
+        // Side-effect require with no binding -- should not flag anything
+        let source = "require(\"./setup\");\nconst x = 1;\n";
+        let echoes = check_js(source);
+        assert_eq!(count(&echoes, "unused-imports"), 0);
     }
 
     // =======================================================================

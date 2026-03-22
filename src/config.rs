@@ -24,6 +24,14 @@ pub struct PatternRule {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+pub struct ObsoleteTermRule {
+    pub old: String,
+    pub new: String,
+    #[serde(default)]
+    pub glob: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
 pub struct ImportRule {
     pub files: String,
     pub deny: Vec<String>,
@@ -75,7 +83,7 @@ struct EckoGuardConfig {
     #[serde(default)]
     banned_patterns: Vec<PatternRule>,
     #[serde(default)]
-    obsolete_terms: Vec<PatternRule>,
+    obsolete_terms: Vec<ObsoleteTermRule>,
     #[serde(default)]
     blocked_commands: Vec<PatternRule>,
     #[serde(default)]
@@ -108,7 +116,7 @@ pub struct EckoConfig {
     pub disabled_checks: Vec<String>,
     pub exclude: Vec<String>,
     pub banned_patterns: Vec<PatternRule>,
-    pub obsolete_terms: Vec<PatternRule>,
+    pub obsolete_terms: Vec<ObsoleteTermRule>,
     pub blocked_commands: Vec<PatternRule>,
     pub autofix: HashMap<String, bool>,
     pub deep_analysis: HashMap<String, bool>,
@@ -239,8 +247,9 @@ fn merge_guard_config(cfg: &mut EckoConfig, cwd: &str) {
     if !guard.banned_patterns.is_empty() {
         guard_check_names.insert("banned-patterns".to_string());
     }
-    // Note: obsolete_terms is merged but has no Rust v2 check yet.
-    // When a check is implemented, add its name to guard_check_names here.
+    if !guard.obsolete_terms.is_empty() {
+        guard_check_names.insert("obsolete-terms".to_string());
+    }
     for cc in &guard.custom_checks {
         guard_check_names.insert(cc.name.clone());
     }
@@ -495,6 +504,30 @@ blocked_commands:
         assert!(cfg.guard_meta.is_none());
     }
 
+    // --- Example config validation tests ---
+
+    #[test]
+    fn example_config_active_sections_parse() {
+        let example = include_str!("../ecko.yaml.example");
+        // Parse the active (non-commented) parts of the example
+        let result: Result<EckoConfig, _> = serde_yaml::from_str(example);
+        assert!(
+            result.is_ok(),
+            "ecko.yaml.example active sections failed to parse: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn example_config_import_rules_use_correct_field_names() {
+        // Verify the example doesn't use the old Python v1 field name 'deny_import'
+        let example = include_str!("../ecko.yaml.example");
+        assert!(
+            !example.contains("deny_import"),
+            "ecko.yaml.example uses deprecated 'deny_import' field -- should be 'deny'"
+        );
+    }
+
     #[test]
     fn no_guard_meta_when_no_guard_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -503,5 +536,210 @@ blocked_commands:
 
         assert_eq!(cfg.echo_cap_per_check, 7);
         assert!(cfg.guard_meta.is_none());
+    }
+
+    // --- ObsoleteTermRule deserialization tests ---
+
+    #[test]
+    fn obsolete_terms_deserialize() {
+        let yaml = "obsolete_terms:\n  - old: UserProfile\n    new: Account\n";
+        let cfg: EckoConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(cfg.obsolete_terms.len(), 1);
+        assert_eq!(cfg.obsolete_terms[0].old, "UserProfile");
+        assert_eq!(cfg.obsolete_terms[0].new, "Account");
+    }
+
+    #[test]
+    fn obsolete_terms_deserialize_with_glob() {
+        let yaml = "obsolete_terms:\n  - old: Foo\n    new: Bar\n    glob: \"*.py\"\n";
+        let cfg: EckoConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(cfg.obsolete_terms.len(), 1);
+        assert_eq!(cfg.obsolete_terms[0].glob, "*.py");
+    }
+
+    #[test]
+    fn obsolete_terms_default_empty() {
+        let yaml = "echo_cap_per_check: 3\n";
+        let cfg: EckoConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(cfg.obsolete_terms.is_empty());
+    }
+
+    #[test]
+    fn guard_merge_obsolete_terms_check_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let guard_yaml = r#"
+created: 1711111800.0
+task: "rename-terms"
+obsolete_terms:
+  - old: OldName
+    new: NewName
+"#;
+        std::fs::write(dir.path().join(".ecko-guard.yaml"), guard_yaml).unwrap();
+        let cfg = load_config(dir.path().to_str().unwrap());
+
+        assert_eq!(cfg.obsolete_terms.len(), 1);
+        let meta = cfg.guard_meta.as_ref().unwrap();
+        assert!(meta.guard_check_names.contains("obsolete-terms"));
+    }
+
+    // --- All config fields roundtrip test ---
+
+    #[test]
+    fn all_config_fields_roundtrip() {
+        // Every EckoConfig field (except guard_meta which is #[serde(skip)]) must appear
+        // in this YAML and be verified below. If a new field is added to EckoConfig without
+        // updating this test, a reviewer should flag the gap.
+        let yaml = r#"
+disabled_checks:
+  - unused-imports
+exclude:
+  - "generated/*"
+banned_patterns:
+  - pattern: "TODO"
+    message: "No TODOs"
+obsolete_terms:
+  - old: "Foo"
+    new: "Bar"
+blocked_commands:
+  - pattern: "rm -rf"
+    message: "dangerous"
+autofix:
+  enabled: false
+deep_analysis:
+  pyright: false
+echo_cap_per_check: 3
+echo_cap_cross_file: 10
+session_hours: 2.0
+output_format: json
+reverb:
+  enabled: true
+builtin_shadow_allowlist:
+  - type
+  - id
+import_rules:
+  - files: "*.py"
+    deny:
+      - api
+    message: "no api imports"
+custom_checks: []
+fix_suggestions: false
+"#;
+        let cfg: EckoConfig = serde_yaml::from_str(yaml).unwrap();
+
+        // Every field verified:
+        assert_eq!(cfg.disabled_checks, vec!["unused-imports"]);
+        assert_eq!(cfg.exclude, vec!["generated/*"]);
+        assert_eq!(cfg.banned_patterns.len(), 1);
+        assert_eq!(cfg.banned_patterns[0].pattern, "TODO");
+        assert_eq!(cfg.banned_patterns[0].message, "No TODOs");
+        assert_eq!(cfg.obsolete_terms.len(), 1);
+        assert_eq!(cfg.obsolete_terms[0].old, "Foo");
+        assert_eq!(cfg.obsolete_terms[0].new, "Bar");
+        assert_eq!(cfg.blocked_commands.len(), 1);
+        assert_eq!(cfg.blocked_commands[0].pattern, "rm -rf");
+        assert_eq!(cfg.autofix.get("enabled"), Some(&false));
+        assert_eq!(cfg.deep_analysis.get("pyright"), Some(&false));
+        assert_eq!(cfg.echo_cap_per_check, 3);
+        assert_eq!(cfg.echo_cap_cross_file, 10);
+        assert_eq!(cfg.session_hours, 2.0);
+        assert_eq!(cfg.output_format, "json");
+        assert_eq!(cfg.reverb.get("enabled"), Some(&true));
+        assert_eq!(cfg.import_rules.len(), 1);
+        assert_eq!(cfg.import_rules[0].files, "*.py");
+        assert_eq!(cfg.import_rules[0].deny, vec!["api"]);
+        assert_eq!(cfg.import_rules[0].message, "no api imports");
+        assert!(cfg.custom_checks.is_empty());
+        assert!(!cfg.fix_suggestions);
+        let allowlist = cfg.builtin_shadow_allowlist.as_ref().unwrap();
+        assert_eq!(allowlist.len(), 2);
+        assert_eq!(allowlist[0], "type");
+        assert_eq!(allowlist[1], "id");
+        // guard_meta is #[serde(skip)] -- always None from deserialization
+        assert!(cfg.guard_meta.is_none());
+    }
+
+    // --- Config-to-behavior integration tests ---
+
+    #[test]
+    fn disabled_checks_suppress_echoes_from_load_config() {
+        // Verify that disabled_checks loaded from ecko.yaml actually takes effect
+        // when checked via get_disabled_checks()
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = "disabled_checks:\n  - banned-patterns\n  - unicode-artifacts\n";
+        std::fs::write(dir.path().join("ecko.yaml"), yaml).unwrap();
+        let cfg = load_config(dir.path().to_str().unwrap());
+
+        let disabled = get_disabled_checks(&cfg);
+        assert!(disabled.contains("banned-patterns"));
+        assert!(disabled.contains("unicode-artifacts"));
+        assert!(!disabled.contains("unused-imports"));
+    }
+
+    #[test]
+    fn fix_suggestions_false_from_config_file() {
+        // Verify fix_suggestions: false survives the full load_config path
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = "fix_suggestions: false\n";
+        std::fs::write(dir.path().join("ecko.yaml"), yaml).unwrap();
+        let cfg = load_config(dir.path().to_str().unwrap());
+
+        assert!(!cfg.fix_suggestions);
+    }
+
+    #[test]
+    fn fix_suggestions_default_true_from_config_file() {
+        // Verify default when fix_suggestions is not set in config
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = "echo_cap_per_check: 5\n";
+        std::fs::write(dir.path().join("ecko.yaml"), yaml).unwrap();
+        let cfg = load_config(dir.path().to_str().unwrap());
+
+        assert!(cfg.fix_suggestions);
+    }
+
+    #[test]
+    fn echo_cap_per_check_from_config_file() {
+        // Verify echo_cap_per_check survives load_config and affects apply_per_check_cap
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = "echo_cap_per_check: 2\n";
+        std::fs::write(dir.path().join("ecko.yaml"), yaml).unwrap();
+        let cfg = load_config(dir.path().to_str().unwrap());
+
+        assert_eq!(cfg.echo_cap_per_check, 2);
+
+        // Verify the loaded value actually changes cap behavior
+        let echoes: Vec<echo::Echo> = (1..=5)
+            .map(|i| echo::Echo {
+                check: "test-check".to_string(),
+                line: i,
+                message: "msg".to_string(),
+                suggestion: String::new(),
+                severity: echo::Severity::Warn,
+                fix: None,
+            })
+            .collect();
+        let capped = echo::apply_per_check_cap(echoes, cfg.echo_cap_per_check);
+        assert_eq!(capped.len(), 2);
+    }
+
+    #[test]
+    fn output_format_json_from_config_file() {
+        // Verify output_format: json survives load_config and is_output_json detects it
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = "output_format: json\n";
+        std::fs::write(dir.path().join("ecko.yaml"), yaml).unwrap();
+        let cfg = load_config(dir.path().to_str().unwrap());
+
+        assert!(is_output_json(&cfg));
+    }
+
+    #[test]
+    fn session_hours_from_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = "session_hours: 1.5\n";
+        std::fs::write(dir.path().join("ecko.yaml"), yaml).unwrap();
+        let cfg = load_config(dir.path().to_str().unwrap());
+
+        assert!((cfg.session_hours - 1.5).abs() < f64::EPSILON);
     }
 }

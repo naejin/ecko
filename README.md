@@ -1,6 +1,6 @@
 # ecko
 
-[![v2.2.1](https://img.shields.io/badge/version-2.2.1-blue)](https://github.com/naejin/ecko/releases/tag/v2.2.1)
+[![v2.3.0](https://img.shields.io/badge/version-2.3.0-blue)](https://github.com/naejin/ecko/releases/tag/v2.3.0)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-plugin-7c3aed)](https://docs.anthropic.com/en/docs/claude-code)
 [![Rust](https://img.shields.io/badge/rust-native-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -49,7 +49,7 @@ Ecko hooks into four moments in a Claude Code session:
 | When | What | Speed |
 |------|------|-------|
 | **Before every Bash command** | Blocks dangerous commands (`git push --force`, `rm -rf /`, `--no-verify`, etc.) + user-configured `blocked_commands` | Instant |
-| **After every Write/Edit** | Layer 1: silent auto-fix (trailing whitespace, formatters). Layer 2: 28 native checks via tree-sitter | <120ms |
+| **After every Write/Edit** | Layer 1: silent auto-fix (trailing whitespace, formatters). Layer 2: 29 native checks via tree-sitter | <120ms |
 | **When exiting plan mode** | Nudges agent to include test steps | Instant |
 | **When agent tries to stop** | Layer 3: deep analysis across all modified files -- dead code, external adapters (pyright, tsc, clippy, golangci-lint) | 2-10s |
 

@@ -98,6 +98,7 @@ pub fn list_applicable_checks(lang: Lang) -> Vec<String> {
         "unicode-artifacts",
         "banned-patterns",
         "import-layers",
+        "obsolete-terms",
     ];
 
     let lang_checks: &[&str] = match lang {

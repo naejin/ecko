@@ -192,10 +192,18 @@ pub fn run_post_tool_use(file_path: &str, cwd: &str, plugin_root: &str) -> i32 {
     let echoes = suppress::filter_suppressed(echoes, file_path);
 
     // 10. Filter disabled checks
-    let echoes: Vec<Echo> = echoes
+    let mut echoes: Vec<Echo> = echoes
         .into_iter()
         .filter(|e| !disabled.contains(&e.check))
         .collect();
+
+    // 10a. Strip fix suggestions if disabled in config.
+    if !config.fix_suggestions {
+        echoes.iter_mut().for_each(|e| e.fix = None);
+    }
+
+    // 10b. Apply per-check echo cap.
+    let echoes = echo::apply_per_check_cap(echoes, config.echo_cap_per_check);
 
     // 11. Record to session ledger (best-effort, never blocks the hook)
     if config.session_hours > 0.0 {
@@ -513,6 +521,21 @@ pub fn run_stop_inner(cwd: &str, files_override: Option<Vec<String>>) -> StopRes
                 all_echoes.remove(&path);
             }
         }
+    }
+
+    // --- 7a. Strip fix suggestions if disabled in config ---
+    if !config.fix_suggestions {
+        for echoes in all_echoes.values_mut() {
+            echoes.iter_mut().for_each(|e| e.fix = None);
+        }
+    }
+
+    // --- 7b. Apply per-check cap per file ---
+    if config.echo_cap_per_check > 0 {
+        for echoes in all_echoes.values_mut() {
+            *echoes = echo::apply_per_check_cap(std::mem::take(echoes), config.echo_cap_per_check);
+        }
+        all_echoes.retain(|_, v| !v.is_empty());
     }
 
     // --- 8. Compute timing + corrections ---

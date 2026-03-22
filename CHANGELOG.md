@@ -1,5 +1,52 @@
 # Changelog
 
+## v2.3.0
+
+6 bug fixes from external review, 1 new check, structural prevention measures.
+
+### New features
+
+- **`obsolete-terms` check (29th native)** -- flags occurrences of deprecated or renamed terms
+  configured in ecko.yaml `obsolete_terms`. Each rule maps `old` to `new` with optional `glob`
+  filter. Word-boundary matching prevents false positives. Includes fix suggestions with byte-range
+  replacements. New `ObsoleteTermRule` struct replaces `PatternRule` for this field.
+- **CJS `require()` unused-imports** -- JS/TS `unused-imports` check now detects CommonJS
+  `const x = require('mod')` and destructured `const { x, y } = require('mod')` patterns.
+  Previously only ESM `import` syntax was detected. AST-walk approach handles `const`, `let`,
+  `var`, plain identifiers, destructured names, and aliased destructuring.
+
+### Bug fixes
+
+- **`echo_cap_per_check` now functional** -- config field (default 5) was parsed but never used at
+  runtime since the v2.0.0 rewrite. New `apply_per_check_cap()` in echo.rs limits echoes per check
+  per file. Wired in PostToolUse, Stop, and MCP check_file modes.
+- **`fix_suggestions` now controls fix emission** -- config field (default true) was only displayed
+  in `/ecko:status` output. Now when `fix_suggestions: false`, all `Fix` objects are stripped from
+  echoes before output. Wired in PostToolUse, Stop, and MCP check_file modes.
+- **`ecko.yaml.example` field name corrected** -- import_rules example used `deny_import:` (Python
+  v1 field name) instead of `deny:` (actual Rust struct field). Serde silently ignored the wrong
+  name, giving users empty deny lists with zero enforcement and no error.
+- **Dry-run relative path resolution** -- `--mode dry-run` now resolves relative `--file` paths
+  against `--cwd`, matching PostToolUse behavior. Previously failed with "file not found" on
+  relative paths.
+
+### Prevention (structural)
+
+- **Config integration tests** -- 15 new tests verify that config fields actually change runtime
+  behavior, not just parse correctly. Includes `all_config_fields_roundtrip` test that exercises
+  every EckoConfig field, plus behavioral tests for echo_cap_per_check, fix_suggestions,
+  obsolete_terms, banned_patterns, and import_rules through the full check pipeline.
+- **Example validation test** -- `example_config_active_sections_parse` verifies ecko.yaml.example
+  parses as valid EckoConfig. `example_config_import_rules_use_correct_field_names` guards against
+  field name regression. Already caught the `obsolete_terms` example using wrong field names.
+- **Root cause:** 5 of 6 bugs traced to monolithic v2.0.0 Rust rewrite (14,740 insertions in one
+  commit). Config fields were mechanically copied from Python v1 but consumption code was not
+  ported. Tests verified parsing, not behavior.
+
+### Tests
+
+- 350 Rust unit tests (~1s) + 72 validation fixtures.
+
 ## v2.2.1
 
 Bug fix: reverb note preservation.

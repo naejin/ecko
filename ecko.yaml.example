@@ -26,6 +26,7 @@ banned_patterns:
     message: "Use brand color utilities instead of raw Tailwind colors"
 
 # Obsolete terms - flag old names that should be renamed
+# Each rule maps an old term to its replacement with word-boundary matching.
 obsolete_terms:
   - old: "UserProfile"
     new: "Account"
@@ -35,12 +36,12 @@ obsolete_terms:
 # Each rule specifies which files (by glob) are denied from importing which modules.
 import_rules: []
   # - files: "routes/*.py"
-  #   deny_import:
+  #   deny:
   #     - repositories
   #     - sqlalchemy
   #   message: "Routes must not import from the data layer directly"
   # - files: "components/*.tsx"
-  #   deny_import:
+  #   deny:
   #     - api
   #   message: "Components should use hooks, not call API directly"
 
@@ -118,7 +119,7 @@ reverb:
 #     message: "Use expect() or proper error handling instead of unwrap()"
 
 # Disable specific built-in checks (by ecko check name)
-# Available native checks (28 total):
+# Available native checks (29 total):
 #   Python: unused-imports, singleton-comparison, bare-except, star-imports,
 #     mutable-default-args, builtin-shadowing, placeholder-code,
 #     unreachable-code, duplicate-keys, test-conditional, fixed-wait,
@@ -127,5 +128,5 @@ reverb:
 #     duplicate-keys, empty-block-statements, useless-catch, placeholder-code
 #   Go: unused-imports, empty-error-check, unreachable-code, placeholder-code
 #   Rust: unused-imports, todo-macro, unreachable-code, placeholder-code
-#   Universal: unicode-artifacts, banned-patterns, import-layers
+#   Universal: unicode-artifacts, banned-patterns, import-layers, obsolete-terms
 disabled_checks: []

@@ -29,6 +29,11 @@ pub fn check_file(file_path: &str, cwd: &str) -> String {
     echoes = suppress::filter_suppressed(echoes, file_path);
     echoes.retain(|e| !disabled.contains(&e.check));
 
+    if !cfg.fix_suggestions {
+        echoes.iter_mut().for_each(|e| e.fix = None);
+    }
+    echoes = echo::apply_per_check_cap(echoes, cfg.echo_cap_per_check);
+
     echo::format_file_echoes_json(file_path, &echoes, &[])
 }
 
@@ -79,6 +84,7 @@ pub fn status(cwd: &str) -> String {
         "unicode-artifacts",
         "banned-patterns",
         "import-layers",
+        "obsolete-terms",
         // Workspace
         "dead-code",
         "unused-exports",
@@ -181,6 +187,7 @@ pub fn explain(check_name: &str) -> String {
         "unused-exports" => "Detects exported symbols in JS/TS modules that are never imported by any other file. Unused exports bloat the API surface and confuse consumers.",
         "banned-patterns" => "Flags code matching user-configured regex patterns in ecko.yaml. Use this to enforce project-specific rules like banning deprecated APIs or enforcing naming conventions.",
         "import-layers" => "Enforces import boundaries between layers of your codebase. Configure rules in ecko.yaml to prevent e.g. route handlers from importing database internals directly.",
+        "obsolete-terms" => "Flags occurrences of deprecated or renamed terms configured in ecko.yaml obsolete_terms. Each rule maps an old term to its replacement. Use this to enforce consistent terminology during renames or migrations.",
         _ => return format!("Unknown check '{}'. Use ecko_status to see all available checks.", check_name),
     };
     format!("{}: {}", check_name, explanation)

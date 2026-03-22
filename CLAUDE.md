@@ -57,6 +57,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Pyright is a Python tool: use `resolve_python_tool("pyright")`, NOT `resolve_node_tool` (despite npm availability)
 - Layer 2 checks live in `_run_layer2_checks()` — add new checks there, not in `run_post_tool_use()` or `run_stop()` separately
 - JS/TS import extraction (`_extract_js_imports`) skips commented-out imports via `_is_in_js_comment()` heuristic
+- JS/TS unused-imports detects both ESM `import` and CJS `const x = require()` patterns via `collect_require_imports()` and `is_require_call()` in javascript.rs
 - `safe_regex_compile()` in `checks/regex_utils.py` caches compiled patterns in `_compiled_cache` — each pattern compiled at most once per process. Timeouts are NOT cached (allow retry); only `re.error` failures cache `None`.
 - Fixture cache (`_fixture_cache`) stores `(paths, mtime, names)` — compares path lists to detect new conftest.py files
 - `checks/fingerprint.py` is a pure utility (imports only `os`, `json`) — `detect_frameworks(cwd)` returns set of framework identifiers, no caching yet
@@ -135,6 +136,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Dry-run smoke test: `python3 checks/runner.py --file <path> --mode dry-run --cwd <dir> --plugin-root .`
 - Stop-mode validation: copy source to tmp dir, `git init` + commit all, modify files (append newline), then run `--mode stop`. Must copy WITHOUT `.git` dir (`shutil.copytree` with `ignore_patterns('.git')`) or nested git confuses `_get_modified_files()`
 - Guard integration: create `.ecko-guard.yaml` with test rules in tmp dir, run `--mode post-tool-use`, verify guard rules are enforced alongside ecko.yaml rules
+- Config integration tests verify every config field affects runtime behavior -- not just parsing
 - Use parallel subagents for multi-repo validation (5 agents x 2 repos each works well)
 - CI matrix: `{ubuntu, macos, windows} × {Python 3.10, 3.12}` -- 6 jobs total (`.github/workflows/test.yml`)
 
@@ -166,7 +168,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Update local plugin: `claude plugins update ecko@monet-plugins` (full marketplace qualifier required)
 - Update `commands/` listing in Structure section of CLAUDE.md if adding/removing commands
 - Update commands table in README.md if adding/removing commands
-- CHANGELOG test count must match actual `cargo test` output (currently 303)
+- CHANGELOG test count must match actual `cargo test` output (currently 350)
 - Update test count in both CHANGELOG.md AND CLAUDE.md after final stabilization, not after initial implementation (review rounds add tests)
 - Update release notes retroactively: `gh release edit vX --repo naejin/ecko --notes-file /tmp/notes.md`
 - Update README.md checks tables when adding new checks
@@ -281,7 +283,8 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - MCP `status()` uses `env!("CARGO_PKG_VERSION")` — version can never drift from Cargo.toml
 
 ## Current version and next milestone
-- Current: v2.2.1 (reverb note preservation on tune "none")
+- Current: v2.3.0 (6 bug fixes, obsolete-terms check, structural prevention)
+- Previous: v2.2.1 (reverb note preservation on tune "none")
 - Previous: v2.2.0 (deep modules, architecture guard, README rewrite)
 - Previous: v2.1.0 (validation suite, FP fixes, Go alias/blank imports, guard hardening)
 - Previous: v2.0.0 (Rust rewrite with tree-sitter + MCP server)
@@ -305,7 +308,7 @@ The Python code in `checks/` still exists but hooks now point to the Rust binary
 - `src/main.rs` — CLI: `--mode {post-tool-use,stop,pre-tool-use-bash,dry-run,mcp-server}`
 - `src/runner.rs` — orchestrator: `run_post_tool_use()`, `run_stop()`, `run_dry_run()`
 - `src/config.rs` — `ecko.yaml` via serde_yaml, `EckoConfig` struct with all accessors
-- `src/echo.rs` — `Echo` struct (with `Fix` + `Severity`), compact text + JSON formatters, `emit()`
+- `src/echo.rs` — `Echo` struct (with `Fix` + `Severity`), compact text + JSON formatters, `emit()`, `apply_per_check_cap()`
 - `src/lang.rs` — `Lang` enum, `detect_language()`, `parse_for_checks()`, `is_test_file()`
 - `src/query_engine.rs` — `QueryCheck` struct, `compile_query()`, `run_query()`, `capture_index_or_skip()`
 - `src/checks/` — per-language check modules: `python.rs`, `javascript.rs`, `go.rs`, `rust_checks.rs`, `universal.rs`, `custom.rs`, `dead_code.rs`
@@ -325,7 +328,7 @@ The Python code in `checks/` still exists but hooks now point to the Rust binary
 ## Rust build + test
 - Always run `cargo fmt` before committing -- CI runs `cargo fmt --check` and rejects unformatted code (common issue: multi-item-per-line const arrays)
 - Build: `cargo build --release` (8.2MB binary, ~30s)
-- Test: `cargo test` (299 tests, ~1s)
+- Test: `cargo test` (350 tests, ~1s)
 - Check: `cargo check` (fast type-check without codegen)
 - Smoke test: `target/release/ecko --mode post-tool-use --file <path> --cwd <dir> --plugin-root .`
 - Bash guard: `echo "COMMAND" | target/release/ecko --mode pre-tool-use-bash --cwd . --plugin-root .`
@@ -364,12 +367,12 @@ The Python code in `checks/` still exists but hooks now point to the Rust binary
 - `--force-with-lease --force` bypass: strip `--force-with-lease` then check for standalone `--force`
 - Guard regex patterns for git subcommands use `git\b.*\bsubcommand` (not `git\s+subcommand`) to match regardless of intervening args like `-C /dir`
 
-## Rust check inventory (28 native checks)
+## Rust check inventory (29 native checks)
 - Python (12): unused-imports, singleton-comparison, bare-except, star-imports, mutable-default-args, builtin-shadowing, placeholder-code, unreachable-code, duplicate-keys, test-conditional, fixed-wait, mock-spec-bypass
 - JS/TS (8): unused-imports, unreachable-code, debugger-statement, no-var, duplicate-keys, empty-block-statements, useless-catch, placeholder-code
 - Go (4): unused-imports, empty-error-check, unreachable-code, placeholder-code
 - Rust (4): unused-imports, todo-macro, unreachable-code, placeholder-code
-- Universal (3+): unicode-artifacts, banned-patterns, import-layers
+- Universal (4+): unicode-artifacts, banned-patterns, import-layers, obsolete-terms
 - External optional: pyright, tsc, golangci-lint, clippy
 
 ## Adding a Rust check
@@ -385,6 +388,8 @@ The Python code in `checks/` still exists but hooks now point to the Rust binary
 - Added: `custom_checks` (tree-sitter query checks in ecko.yaml), `fix_suggestions` (bool, default true)
 - Added: `.ecko-guard.yaml` (temporary guard rules, merged by `merge_guard_config()` in config.rs)
 - Kept: `disabled_checks`, `exclude`, `banned_patterns`, `obsolete_terms`, `blocked_commands`, `autofix`, `deep_analysis`, `echo_cap_per_check`, `echo_cap_cross_file`, `session_hours`, `output_format`, `reverb`, `builtin_shadow_allowlist`, `import_rules`
+- `obsolete_terms` now has a native Rust check: `ObsoleteTermRule` struct (`{old: String, new: String, glob: String}`), matched via regex with glob-based file filtering
+- `ecko.yaml.example` uses `deny` (not `deny_import`) for import rule action field -- validation tests prevent example/config drift
 
 ## Incomplete / future work (v2.1)
 - Incremental parsing in MCP server mode (tree-sitter supports it, not implemented)

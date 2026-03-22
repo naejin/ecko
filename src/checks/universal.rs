@@ -10,7 +10,7 @@ use regex::Regex;
 
 use crate::config::EckoConfig;
 use crate::debug;
-use crate::echo::{Echo, Severity};
+use crate::echo::{Echo, Fix, Severity};
 use crate::lang::{self, Lang};
 
 // ---------------------------------------------------------------------------
@@ -71,6 +71,12 @@ pub fn run_checks(
         source,
         lang,
         &config.import_rules,
+        cwd,
+    ));
+    echoes.extend(check_obsolete_terms(
+        file_path,
+        source,
+        &config.obsolete_terms,
         cwd,
     ));
 
@@ -468,6 +474,112 @@ fn glob_matches(pattern: &str, text: &str) -> bool {
         }
         Err(_) => false,
     }
+}
+
+// ===========================================================================
+// Obsolete terms check
+// ===========================================================================
+
+/// Check file for obsolete/renamed terms configured in `obsolete_terms`.
+///
+/// Uses word-boundary matching: the character before and after the match must
+/// not be alphanumeric or underscore. Each match gets a `Fix` with the
+/// replacement term.
+pub fn check_obsolete_terms(
+    file_path: &str,
+    source: &str,
+    rules: &[crate::config::ObsoleteTermRule],
+    cwd: &str,
+) -> Vec<Echo> {
+    if rules.is_empty() || source.is_empty() {
+        return Vec::new();
+    }
+
+    let line_starts = build_line_starts(source);
+
+    let basename = Path::new(file_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+
+    let rel_path = if !cwd.is_empty() {
+        relative_path(file_path, cwd)
+    } else {
+        String::new()
+    };
+
+    let mut echoes = Vec::new();
+    let source_bytes = source.as_bytes();
+
+    for rule in rules {
+        if rule.old.is_empty() {
+            continue;
+        }
+
+        // Apply glob filter if specified
+        if !rule.glob.is_empty() {
+            let glob = &rule.glob;
+            if !glob_matches(glob, basename)
+                && (rel_path.is_empty() || !glob_matches(glob, &rel_path))
+            {
+                continue;
+            }
+        }
+
+        // Scan for all occurrences with word-boundary matching
+        let old_bytes = rule.old.as_bytes();
+        let old_len = old_bytes.len();
+        let src_len = source_bytes.len();
+
+        let mut pos = 0;
+        while pos + old_len <= src_len {
+            if let Some(found) = source[pos..].find(&rule.old) {
+                let match_start = pos + found;
+                let match_end = match_start + old_len;
+
+                // Word-boundary check: prev char must not be alphanumeric/_
+                let word_start = if match_start == 0 {
+                    true
+                } else {
+                    let prev = source_bytes[match_start - 1];
+                    !prev.is_ascii_alphanumeric() && prev != b'_'
+                };
+
+                // Word-boundary check: next char must not be alphanumeric/_
+                let word_end = if match_end >= src_len {
+                    true
+                } else {
+                    let next = source_bytes[match_end];
+                    !next.is_ascii_alphanumeric() && next != b'_'
+                };
+
+                if word_start && word_end {
+                    let line_num = offset_to_line(&line_starts, match_start);
+                    echoes.push(Echo {
+                        check: "obsolete-terms".to_string(),
+                        line: line_num,
+                        message: format!(
+                            "'{}' is obsolete -- replace with '{}'",
+                            rule.old, rule.new
+                        ),
+                        suggestion: String::new(),
+                        severity: Severity::Warn,
+                        fix: Some(Fix {
+                            start_byte: match_start,
+                            end_byte: match_end,
+                            replacement: rule.new.clone(),
+                        }),
+                    });
+                }
+
+                pos = match_end;
+            } else {
+                break;
+            }
+        }
+    }
+
+    echoes
 }
 
 // ===========================================================================
@@ -1042,6 +1154,152 @@ mod tests {
         assert!(!matches_deny("react-dom", "react", false));
     }
 
+    // --- obsolete terms tests ---
+
+    #[test]
+    fn test_obsolete_terms_basic() {
+        use crate::config::ObsoleteTermRule;
+        let source = "let profile = UserProfile::new();\n";
+        let rules = vec![ObsoleteTermRule {
+            old: "UserProfile".to_string(),
+            new: "Account".to_string(),
+            glob: String::new(),
+        }];
+        let echoes = check_obsolete_terms("test.rs", source, &rules, "");
+        assert_eq!(echoes.len(), 1);
+        assert_eq!(echoes[0].check, "obsolete-terms");
+        assert_eq!(echoes[0].line, 1);
+        assert!(echoes[0].message.contains("'UserProfile' is obsolete"));
+        assert!(echoes[0].message.contains("'Account'"));
+        let fix = echoes[0].fix.as_ref().unwrap();
+        assert_eq!(fix.replacement, "Account");
+        assert_eq!(&source[fix.start_byte..fix.end_byte], "UserProfile");
+    }
+
+    #[test]
+    fn test_obsolete_terms_word_boundary() {
+        use crate::config::ObsoleteTermRule;
+        // "UserProfileManager" should NOT match "UserProfile" (suffix continues)
+        let source = "let x = UserProfileManager::new();\n";
+        let rules = vec![ObsoleteTermRule {
+            old: "UserProfile".to_string(),
+            new: "Account".to_string(),
+            glob: String::new(),
+        }];
+        let echoes = check_obsolete_terms("test.rs", source, &rules, "");
+        assert!(echoes.is_empty());
+    }
+
+    #[test]
+    fn test_obsolete_terms_word_boundary_prefix() {
+        use crate::config::ObsoleteTermRule;
+        // "OldUserProfile" should NOT match "UserProfile" (prefix present)
+        let source = "let x = OldUserProfile::new();\n";
+        let rules = vec![ObsoleteTermRule {
+            old: "UserProfile".to_string(),
+            new: "Account".to_string(),
+            glob: String::new(),
+        }];
+        let echoes = check_obsolete_terms("test.rs", source, &rules, "");
+        assert!(echoes.is_empty());
+    }
+
+    #[test]
+    fn test_obsolete_terms_multiple_matches() {
+        use crate::config::ObsoleteTermRule;
+        let source = "UserProfile x;\nUserProfile y;\n";
+        let rules = vec![ObsoleteTermRule {
+            old: "UserProfile".to_string(),
+            new: "Account".to_string(),
+            glob: String::new(),
+        }];
+        let echoes = check_obsolete_terms("test.rs", source, &rules, "");
+        assert_eq!(echoes.len(), 2);
+        assert_eq!(echoes[0].line, 1);
+        assert_eq!(echoes[1].line, 2);
+    }
+
+    #[test]
+    fn test_obsolete_terms_glob_filter() {
+        use crate::config::ObsoleteTermRule;
+        let source = "UserProfile x;\n";
+        let rules = vec![ObsoleteTermRule {
+            old: "UserProfile".to_string(),
+            new: "Account".to_string(),
+            glob: "*.py".to_string(),
+        }];
+        // Should NOT match .rs file
+        let echoes = check_obsolete_terms("test.rs", source, &rules, "");
+        assert!(echoes.is_empty());
+        // Should match .py file
+        let echoes = check_obsolete_terms("test.py", source, &rules, "");
+        assert_eq!(echoes.len(), 1);
+    }
+
+    #[test]
+    fn test_obsolete_terms_empty_rules() {
+        let echoes = check_obsolete_terms("test.rs", "UserProfile x;\n", &[], "");
+        assert!(echoes.is_empty());
+    }
+
+    #[test]
+    fn test_obsolete_terms_empty_source() {
+        use crate::config::ObsoleteTermRule;
+        let rules = vec![ObsoleteTermRule {
+            old: "Foo".to_string(),
+            new: "Bar".to_string(),
+            glob: String::new(),
+        }];
+        let echoes = check_obsolete_terms("test.rs", "", &rules, "");
+        assert!(echoes.is_empty());
+    }
+
+    #[test]
+    fn test_obsolete_terms_non_alnum_boundaries() {
+        use crate::config::ObsoleteTermRule;
+        // Dot, paren, bracket, space boundaries should all match
+        let source = "x.UserProfile(y)\n[UserProfile]\n UserProfile \n";
+        let rules = vec![ObsoleteTermRule {
+            old: "UserProfile".to_string(),
+            new: "Account".to_string(),
+            glob: String::new(),
+        }];
+        let echoes = check_obsolete_terms("test.rs", source, &rules, "");
+        assert_eq!(echoes.len(), 3);
+    }
+
+    #[test]
+    fn test_obsolete_terms_at_start_and_end() {
+        use crate::config::ObsoleteTermRule;
+        // Term at very start and very end of source (no prev/next char)
+        let source = "UserProfile";
+        let rules = vec![ObsoleteTermRule {
+            old: "UserProfile".to_string(),
+            new: "Account".to_string(),
+            glob: String::new(),
+        }];
+        let echoes = check_obsolete_terms("test.rs", source, &rules, "");
+        assert_eq!(echoes.len(), 1);
+    }
+
+    #[test]
+    fn test_obsolete_terms_fix_byte_range() {
+        use crate::config::ObsoleteTermRule;
+        let source = "hello UserProfile world\n";
+        let rules = vec![ObsoleteTermRule {
+            old: "UserProfile".to_string(),
+            new: "Account".to_string(),
+            glob: String::new(),
+        }];
+        let echoes = check_obsolete_terms("test.rs", source, &rules, "");
+        assert_eq!(echoes.len(), 1);
+        let fix = echoes[0].fix.as_ref().unwrap();
+        // Verify the fix replaces the right bytes
+        let mut patched = String::from(source);
+        patched.replace_range(fix.start_byte..fix.end_byte, &fix.replacement);
+        assert_eq!(patched, "hello Account world\n");
+    }
+
     // --- helper tests ---
 
     #[test]
@@ -1067,5 +1325,103 @@ mod tests {
         let source = "x = 1 # comment\ny = \"str\"\n";
         let ranges = scan_hash_skip_ranges(source);
         assert!(ranges.len() >= 2); // comment + string
+    }
+
+    // --- Config-to-behavior integration tests ---
+    // These call run_checks() with crafted EckoConfig to verify config fields
+    // actually change runtime behavior.
+
+    #[test]
+    fn config_banned_patterns_wired_through_run_checks() {
+        let mut cfg = EckoConfig::default();
+        cfg.banned_patterns.push(crate::config::PatternRule {
+            pattern: "console\\.log".to_string(),
+            message: "No console.log".to_string(),
+            glob: String::new(),
+        });
+        let source = "console.log('debug');\n";
+        let echoes = run_checks("test.js", source, Lang::JavaScript, &cfg, "");
+        let banned = echoes
+            .iter()
+            .filter(|e| e.check == "banned-patterns")
+            .count();
+        assert!(banned >= 1, "Expected banned-patterns echo from config");
+    }
+
+    #[test]
+    fn config_banned_patterns_empty_produces_no_echoes() {
+        let cfg = EckoConfig::default(); // no banned_patterns
+        let source = "console.log('debug');\n";
+        let echoes = run_checks("test.js", source, Lang::JavaScript, &cfg, "");
+        let banned = echoes
+            .iter()
+            .filter(|e| e.check == "banned-patterns")
+            .count();
+        assert_eq!(
+            banned, 0,
+            "Default config should produce no banned-patterns echoes"
+        );
+    }
+
+    #[test]
+    fn config_obsolete_terms_wired_through_run_checks() {
+        let mut cfg = EckoConfig::default();
+        cfg.obsolete_terms.push(crate::config::ObsoleteTermRule {
+            old: "UserProfile".to_string(),
+            new: "Account".to_string(),
+            glob: String::new(),
+        });
+        let source = "let x = UserProfile;\n";
+        let echoes = run_checks("test.js", source, Lang::JavaScript, &cfg, "");
+        let obsolete = echoes
+            .iter()
+            .filter(|e| e.check == "obsolete-terms")
+            .count();
+        assert!(obsolete >= 1, "Expected obsolete-terms echo from config");
+        // Verify the fix suggestion was generated
+        let fix_echo = echoes.iter().find(|e| e.check == "obsolete-terms").unwrap();
+        assert!(fix_echo.fix.is_some());
+        assert_eq!(fix_echo.fix.as_ref().unwrap().replacement, "Account");
+    }
+
+    #[test]
+    fn config_obsolete_terms_empty_produces_no_echoes() {
+        let cfg = EckoConfig::default(); // no obsolete_terms
+        let source = "let x = UserProfile;\n";
+        let echoes = run_checks("test.js", source, Lang::JavaScript, &cfg, "");
+        let obsolete = echoes
+            .iter()
+            .filter(|e| e.check == "obsolete-terms")
+            .count();
+        assert_eq!(
+            obsolete, 0,
+            "Default config should produce no obsolete-terms echoes"
+        );
+    }
+
+    #[test]
+    fn config_import_rules_wired_through_run_checks() {
+        let mut cfg = EckoConfig::default();
+        cfg.import_rules.push(crate::config::ImportRule {
+            files: "*.py".to_string(),
+            deny: vec!["django".to_string()],
+            message: "No Django imports".to_string(),
+        });
+        let source = "from django.db import models\n";
+        let echoes = run_checks("views.py", source, Lang::Python, &cfg, "");
+        let import_layer = echoes.iter().filter(|e| e.check == "import-layers").count();
+        assert!(import_layer >= 1, "Expected import-layers echo from config");
+    }
+
+    #[test]
+    fn config_import_rules_empty_produces_no_layer_echoes() {
+        let cfg = EckoConfig::default(); // no import_rules
+        let source = "from django.db import models\n";
+        let echoes = run_checks("views.py", source, Lang::Python, &cfg, "");
+        let import_layer = echoes.iter().filter(|e| e.check == "import-layers").count();
+        assert_eq!(
+            import_layer, 0,
+            "Default config should produce no import-layers echoes"
+        );
     }
 }

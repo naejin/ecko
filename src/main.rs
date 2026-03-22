@@ -140,6 +140,12 @@ fn main() {
                 echo::emit("ecko: --file is required for dry-run mode");
                 process::exit(1);
             });
+            // Resolve relative path.
+            let file = if !std::path::Path::new(&file).is_absolute() {
+                format!("{}/{}", cli.cwd, file)
+            } else {
+                file
+            };
             runner::run_dry_run(&file, &cli.cwd, &cli.plugin_root)
         }
         Mode::McpServer => {
