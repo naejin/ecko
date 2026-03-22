@@ -58,6 +58,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Layer 2 checks live in `_run_layer2_checks()` — add new checks there, not in `run_post_tool_use()` or `run_stop()` separately
 - JS/TS import extraction (`_extract_js_imports`) skips commented-out imports via `_is_in_js_comment()` heuristic
 - JS/TS unused-imports detects both ESM `import` and CJS `const x = require()` patterns via `collect_require_imports()` and `is_require_call()` in javascript.rs
+- CJS require detection uses AST walk, not tree-sitter query -- grammar node kinds like `shorthand_property_identifier_pattern` vary across grammar versions, making queries fragile for destructuring patterns
 - `safe_regex_compile()` in `checks/regex_utils.py` caches compiled patterns in `_compiled_cache` — each pattern compiled at most once per process. Timeouts are NOT cached (allow retry); only `re.error` failures cache `None`.
 - Fixture cache (`_fixture_cache`) stores `(paths, mtime, names)` — compares path lists to detect new conftest.py files
 - `checks/fingerprint.py` is a pure utility (imports only `os`, `json`) — `detect_frameworks(cwd)` returns set of framework identifiers, no caching yet
@@ -91,6 +92,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `_strip_trailing_whitespace` must check `\r\n` before `\n` (`.rstrip()` strips `\r` too) — preserves original line endings
 - Shell hooks: use `printf '%s' "$VAR"` not `echo "$VAR"` — echo handles escape sequences inconsistently across platforms
 - Shell hooks: always include `set -euo pipefail` for consistency, even in trivial scripts
+- zsh `>` redirection with `noclobber`: use `rm -f file && printf '...\n' > file` or heredoc, not `echo > existing_file` which fails with "file exists"
 - Integration tests that assert on clean output (`output == ""`) must tolerate tool warnings — on Windows, tools may resolve via npx but fail with WinError 2
 - Adapter post-filter tests: use `os.path.normpath()` on both cwd and modified_files paths — Windows normalizes `/tmp/project` to `\tmp\project`
 - `_get_modified_files` includes recently committed files — tests asserting `output == ""` after commit must account for clean-sweep message
@@ -137,6 +139,8 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Stop-mode validation: copy source to tmp dir, `git init` + commit all, modify files (append newline), then run `--mode stop`. Must copy WITHOUT `.git` dir (`shutil.copytree` with `ignore_patterns('.git')`) or nested git confuses `_get_modified_files()`
 - Guard integration: create `.ecko-guard.yaml` with test rules in tmp dir, run `--mode post-tool-use`, verify guard rules are enforced alongside ecko.yaml rules
 - Config integration tests verify every config field affects runtime behavior -- not just parsing
+- Config fields MUST have both a parsing test AND a behavioral test -- `all_config_fields_roundtrip` in config.rs covers parsing, behavioral tests in universal.rs/echo.rs verify runtime effect. The v2.0.0 rewrite had parsing tests that all passed while 3 config options were dead code.
+- `ecko.yaml.example` validated at test time: `example_config_active_sections_parse` catches struct/example mismatches, `example_config_import_rules_use_correct_field_names` guards field name regressions. Update the example WHEN changing config struct fields.
 - Use parallel subagents for multi-repo validation (5 agents x 2 repos each works well)
 - CI matrix: `{ubuntu, macos, windows} × {Python 3.10, 3.12}` -- 6 jobs total (`.github/workflows/test.yml`)
 
