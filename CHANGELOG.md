@@ -1,5 +1,19 @@
 # Changelog
 
+## v2.2.1
+
+Bug fix: reverb note preservation.
+
+### Bug fixes
+
+- **`/ecko:tune` data loss on "none"** -- reverb notes are no longer deleted when the user
+  selects "none" during tune. Notes are preserved and reappear on the next `/ecko:tune` run.
+  Previously, all reverb notes were unconditionally deleted after processing.
+
+### Tests
+
+- 303 Rust unit tests (~1s) + 69 validation fixtures (no Rust changes in this release).
+
 ## v2.2.0
 
 Deep modules, architecture guard, and README rewrite.

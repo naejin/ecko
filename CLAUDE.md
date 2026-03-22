@@ -96,6 +96,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `.gitignore` must include `target/` -- Rust build artifacts are large and must never be committed
 - Tests using Unix paths (`/tmp/...`) must use `#[cfg(not(windows))]` guard with Windows equivalent (`C:\\temp\\...`) -- Windows `Path::is_absolute()` requires drive letter
 - MCP stdio smoke tests: `{ printf '...'; sleep 2; } | binary` -- keep stdin open so async tokio runtime processes all messages before EOF (Rosetta/Windows are slower to start)
+- MCP stdio smoke tests in zsh: `{ ...; sleep 2; }` brace grouping fails in zsh eval -- use `printf '...\n' | timeout 3 binary` instead
 - Debug mode smoke test: `ECKO_DEBUG=1 python3 checks/runner.py --file <path> --mode post-tool-use --cwd <dir> --plugin-root .`
 - Stop mode with explicit files: `python3 checks/runner.py --file x --mode stop --cwd <dir> --plugin-root . --files file1.py,file2.py`
 
@@ -162,6 +163,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Release CI MCP smoke test requires `sleep 2` after piped JSON-RPC messages for cross-platform reliability
 - Release CI (release.yml) triggers on tag push: builds 5 targets, validates artifacts, publishes GitHub Release with checksums
 - Verify with: `curl -fsSL https://github.com/naejin/ecko/releases/latest/download/install.sh | bash`
+- Update local plugin: `claude plugins update ecko@monet-plugins` (full marketplace qualifier required)
 - Update `commands/` listing in Structure section of CLAUDE.md if adding/removing commands
 - Update commands table in README.md if adding/removing commands
 - CHANGELOG test count must match actual `cargo test` output (currently 303)
@@ -183,7 +185,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 ## Reverb/Tune lifecycle (v0.6.1)
 - Stop hook (runner.py): emits `~~ ecko ~~ tip: run /ecko:reverb` when `reverb: enabled` and echoes found — single line only, no file ops
 - `/ecko:reverb`: user-initiated, creates `.ecko-reverb/{YYYY-MM-DD}-{slug}.md` with echo summary + reflection
-- `/ecko:tune`: reads all `.ecko-reverb/*.md`, deduplicates, presents numbered interactive list, applies user selection to `ecko.yaml`, deletes ALL read reverb notes (even on "none")
+- `/ecko:tune`: reads all `.ecko-reverb/*.md`, deduplicates, presents numbered interactive list, applies user selection to `ecko.yaml`, deletes read reverb notes only when items applied (preserves on "none")
 - `.ecko-reverb/` is in `_DEFAULT_EXCLUDE_DIRS` — reverb notes are never linted
 
 ## Observability (v0.7.0)
@@ -279,7 +281,8 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - MCP `status()` uses `env!("CARGO_PKG_VERSION")` — version can never drift from Cargo.toml
 
 ## Current version and next milestone
-- Current: v2.2.0 (deep modules, architecture guard, README rewrite)
+- Current: v2.2.1 (reverb note preservation on tune "none")
+- Previous: v2.2.0 (deep modules, architecture guard, README rewrite)
 - Previous: v2.1.0 (validation suite, FP fixes, Go alias/blank imports, guard hardening)
 - Previous: v2.0.0 (Rust rewrite with tree-sitter + MCP server)
 - Previous: v1.3.0 (Python, fingerprinting + dry-run)
@@ -416,6 +419,7 @@ The Python code in `checks/` still exists but hooks now point to the Rust binary
 - Parameter structs derive `JsonSchema` from `rmcp::schemars` (v1), NOT standalone `schemars` (v0.8)
 - Use `Parameters<T>` wrapper for tool function params, not `#[tool(param)]` on individual args
 - `ServerHandler::get_info()` returns `InitializeResult`, not `ServerInfo`
+- `InitializeResult::new()` sets `server_info` via `Implementation::from_build_env()` which uses rmcp's crate name/version, NOT the consuming crate's -- always set `result.server_info.name` and `.version` explicitly with `env!("CARGO_PKG_VERSION")`
 - `rmcp::serde` re-export for Serialize/Deserialize on MCP param types
 - Features needed: `server`, `macros`, `transport-io`
 - `#[tool_handler]` macro on `impl ServerHandler` is REQUIRED for tools/list to work -- without it, `list_tools` returns empty and `call_tool` is a no-op. Import via `use rmcp::tool_handler;`

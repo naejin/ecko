@@ -111,5 +111,7 @@ Wait for the user's response. Parse their selection (supports `1,3,5` or `1-4` o
 ## Step 4: Apply and Clean Up
 
 1. **Apply selected items** to `ecko.yaml` (create it if it doesn't exist). Merge with existing config — don't overwrite entries that are already there.
-2. **Delete ALL `.ecko-reverb/*.md` files** that were read in Step 1. This ensures rejected items don't re-appear on the next `/ecko:tune` run. Do this even if the user selected "none".
-3. Tell the user what was applied and that the reverb notes were cleaned up.
+2. **Clean up reverb notes based on selection:**
+   - If the user selected at least one item (including "all"): delete ALL `.ecko-reverb/*.md` files that were read in Step 1.
+   - If the user selected "none": **keep all reverb notes intact**. Tell the user their notes are preserved and will reappear on the next `/ecko:tune` run.
+3. Tell the user what was applied and the cleanup outcome.

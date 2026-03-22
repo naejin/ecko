@@ -1,6 +1,6 @@
 # ecko
 
-[![v2.2.0](https://img.shields.io/badge/version-2.2.0-blue)](https://github.com/naejin/ecko/releases/tag/v2.2.0)
+[![v2.2.1](https://img.shields.io/badge/version-2.2.1-blue)](https://github.com/naejin/ecko/releases/tag/v2.2.1)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-plugin-7c3aed)](https://docs.anthropic.com/en/docs/claude-code)
 [![Rust](https://img.shields.io/badge/rust-native-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
