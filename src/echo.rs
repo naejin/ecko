@@ -63,19 +63,32 @@ pub fn emit(text: &str) {
 // Compact text format
 // ---------------------------------------------------------------------------
 
+/// A group of echoes sharing the same check name.
+struct CheckGroup {
+    name: String,
+    lines: Vec<usize>,
+    has_error: bool,
+    suggestion: String,
+}
+
 /// Group echoes by check name, preserving insertion order.
-fn group_by_check(echoes: &[Echo]) -> Vec<(String, Vec<usize>, bool)> {
-    // (check_name, lines, has_error)
+fn group_by_check(echoes: &[Echo]) -> Vec<CheckGroup> {
     let mut order: Vec<String> = Vec::new();
-    let mut groups: HashMap<String, (Vec<usize>, bool)> = HashMap::new();
+    let mut groups: HashMap<String, CheckGroup> = HashMap::new();
 
     for e in echoes {
-        let entry = groups
-            .entry(e.check.clone())
-            .or_insert_with(|| (Vec::new(), false));
-        entry.0.push(e.line);
+        let group = groups.entry(e.check.clone()).or_insert_with(|| CheckGroup {
+            name: e.check.clone(),
+            lines: Vec::new(),
+            has_error: false,
+            suggestion: String::new(),
+        });
+        group.lines.push(e.line);
         if e.severity == Severity::Error {
-            entry.1 = true;
+            group.has_error = true;
+        }
+        if group.suggestion.is_empty() && !e.suggestion.is_empty() {
+            group.suggestion = e.suggestion.clone();
         }
         if !order.contains(&e.check) {
             order.push(e.check.clone());
@@ -84,10 +97,7 @@ fn group_by_check(echoes: &[Echo]) -> Vec<(String, Vec<usize>, bool)> {
 
     order
         .into_iter()
-        .map(|name| {
-            let (lines, is_err) = groups.remove(&name).unwrap();
-            (name, lines, is_err)
-        })
+        .map(|name| groups.remove(&name).unwrap())
         .collect()
 }
 
@@ -147,7 +157,14 @@ pub fn format_file_echoes(file_path: &str, echoes: &[Echo]) -> String {
     let groups = group_by_check(echoes);
     let parts: Vec<String> = groups
         .iter()
-        .map(|(name, lines, is_err)| format_check_group(name, lines, *is_err))
+        .map(|g| {
+            let base = format_check_group(&g.name, &g.lines, g.has_error);
+            if g.suggestion.is_empty() {
+                base
+            } else {
+                format!("{base} -- {}", g.suggestion)
+            }
+        })
         .collect();
 
     format!("~~ ecko ~~ {} \u{2014} {}", file_path, parts.join(", "))
@@ -578,5 +595,59 @@ mod tests {
         assert_eq!(capped[0].line, 1);
         assert_eq!(capped[1].line, 2);
         // Lines 3-5 are dropped by the cap
+    }
+
+    // --- contextual suggestion tests ---
+
+    #[test]
+    fn format_file_echoes_includes_suggestion() {
+        let echoes = vec![Echo {
+            check: "bare-except".to_string(),
+            line: 10,
+            message: "bare except".to_string(),
+            suggestion: "use except Exception:".to_string(),
+            severity: Severity::Warn,
+            fix: None,
+        }];
+        let result = format_file_echoes("app.py", &echoes);
+        assert!(
+            result.contains("-- use except Exception:"),
+            "suggestion should appear after check group: {result}"
+        );
+    }
+
+    #[test]
+    fn format_file_echoes_no_suggestion_when_empty() {
+        let echoes = vec![echo("bare-except", 10, Severity::Warn)];
+        let result = format_file_echoes("app.py", &echoes);
+        assert!(
+            !result.contains(" -- "),
+            "no suggestion separator when suggestion is empty: {result}"
+        );
+    }
+
+    #[test]
+    fn format_file_echoes_only_first_suggestion_per_check() {
+        let echoes = vec![
+            Echo {
+                check: "bare-except".to_string(),
+                line: 5,
+                message: "msg".to_string(),
+                suggestion: "first hint".to_string(),
+                severity: Severity::Warn,
+                fix: None,
+            },
+            Echo {
+                check: "bare-except".to_string(),
+                line: 15,
+                message: "msg".to_string(),
+                suggestion: "second hint".to_string(),
+                severity: Severity::Warn,
+                fix: None,
+            },
+        ];
+        let result = format_file_echoes("app.py", &echoes);
+        assert!(result.contains("first hint"));
+        assert!(!result.contains("second hint"));
     }
 }

@@ -1,5 +1,38 @@
 # Changelog
 
+## v2.4.0
+
+Diff-scoped checking, session pattern detection, contextual echo hints.
+
+### New features
+
+- **Diff-scoped checking** -- PostToolUse mode now only reports echoes on lines the agent
+  actually changed. Edit tool diffs are computed from the `old_string`/`new_string` in the
+  hook input JSON. Write tool treats all content as agent-written (no filtering). Pre-existing
+  code patterns are silently baselined. Stop mode continues full-file checks for comprehensive
+  coverage. New `EditContext` struct and `compute_changed_lines()` in runner.rs.
+
+- **Session pattern detection** -- When the same check fires on 3+ distinct files in a session,
+  ecko emits a behavioral directive after the echoes: `~~ ecko ~~ pattern: 'bare-except' flagged
+  in 3 files this session -- use explicit exception types`. Teaches the agent to stop repeating
+  mistakes. Configurable via `pattern_threshold` (default 3, 0 to disable). Uses existing
+  session ledger data with zero additional I/O in stop mode.
+
+- **Contextual echo hints** -- Echo messages now include file-type-aware suggestions in the
+  `suggestion` field. Unused imports in `__init__.py` get re-export hints. Test files get
+  fixture hints. Each check has a tailored explanation. Hints appear in compact text output
+  (`check (L1, L2) -- hint`) and JSON output. New `src/hints.rs` module with
+  `pattern_directive()` and `contextual_suggestion()`.
+
+### Config changes
+
+- New field: `pattern_threshold` (default: 3) -- number of distinct files before session
+  pattern directive fires. Set to 0 to disable. Added to `ecko.yaml.example`.
+
+### Tests
+
+- 376 Rust unit tests (~1s) + 72 validation fixtures.
+
 ## v2.3.0
 
 6 bug fixes from external review, 1 new check, structural prevention measures.

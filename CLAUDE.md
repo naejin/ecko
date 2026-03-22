@@ -286,8 +286,39 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `tools::check_workspace()` in `mcp/tools.rs` — delegates to `run_stop_inner()`, formats as JSON. Single codepath for workspace checks.
 - MCP `status()` uses `env!("CARGO_PKG_VERSION")` — version can never drift from Cargo.toml
 
+## Diff-scoped checking (v2.4.0)
+- PostToolUse mode filters echoes to changed lines only (Edit tool: `new_string` match in source; Write tool: no filtering)
+- `EditContext` struct in runner.rs — carries `new_string` from hook stdin JSON
+- `compute_changed_lines(source, edit)` — finds new_string in post-edit source, returns 1-based line set via binary search on line-start offsets
+- Uses `saturating_sub(1)` on end_byte to prevent trailing newline from bleeding into next line
+- Returns `None` (no filtering) when new_string not found — defensive fallback, never silently suppresses
+- Returns `Some(empty)` for empty new_string (deletion) — correct, deletions can't introduce new issues
+- Changed lines computed AFTER autofix re-read (step 7a), against post-autofix source
+- Diff-scope filter applied before suppression/disabled/cap filters (step 8a)
+- Stop mode unchanged — full-file checks for comprehensive coverage
+
+## Session pattern detection (v2.4.0)
+- After PostToolUse echoes are emitted (step 12a), reads session ledger and counts distinct files per check
+- Emits directive at exactly `pattern_threshold` count (not >=) — fires once per check per session
+- Directive format: `~~ ecko ~~ pattern: '{check}' flagged in N files this session -- {hint}`
+- Current file excluded from count (just appended to ledger, would always count itself)
+- `detect_session_patterns()` is standalone function in runner.rs, consistent with `emit_guard_lifecycle`
+- Config: `pattern_threshold` (default 3, 0 = disabled)
+- Per-check directive messages in `src/hints.rs` — `pattern_directive()` returns `&'static str`
+
+## Contextual echo hints (v2.4.0)
+- `src/hints.rs` — pure string module, no I/O, only imports `crate::lang`
+- `contextual_suggestion(check, file_path, message)` returns file-type-aware hint
+- File-type dispatch: `__init__.py` (re-export hints), test files (fixture hints), regular files (generic hints)
+- Enrichment happens centrally in runner.rs step 10a, NOT in individual check modules
+- Only populates empty `suggestion` fields (preserves check-provided suggestions)
+- `group_by_check()` in echo.rs returns 4-tuple: `(name, lines, is_error, first_suggestion)`
+- Compact text output appends ` -- {suggestion}` after check group (one hint per check per file)
+- `banned-patterns`, `import-layers`, `obsolete-terms` return empty string (user message is sufficient)
+
 ## Current version and next milestone
-- Current: v2.3.0 (6 bug fixes, obsolete-terms check, structural prevention)
+- Current: v2.4.0 (diff-scoped checking, session pattern detection, contextual hints)
+- Previous: v2.3.0 (6 bug fixes, obsolete-terms check, structural prevention)
 - Previous: v2.2.1 (reverb note preservation on tune "none")
 - Previous: v2.2.0 (deep modules, architecture guard, README rewrite)
 - Previous: v2.1.0 (validation suite, FP fixes, Go alias/blank imports, guard hardening)
@@ -332,7 +363,7 @@ The Python code in `checks/` still exists but hooks now point to the Rust binary
 ## Rust build + test
 - Always run `cargo fmt` before committing -- CI runs `cargo fmt --check` and rejects unformatted code (common issue: multi-item-per-line const arrays)
 - Build: `cargo build --release` (8.2MB binary, ~30s)
-- Test: `cargo test` (350 tests, ~1s)
+- Test: `cargo test` (376 tests, ~1s)
 - Check: `cargo check` (fast type-check without codegen)
 - Smoke test: `target/release/ecko --mode post-tool-use --file <path> --cwd <dir> --plugin-root .`
 - Bash guard: `echo "COMMAND" | target/release/ecko --mode pre-tool-use-bash --cwd . --plugin-root .`

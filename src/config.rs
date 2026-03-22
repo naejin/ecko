@@ -129,6 +129,7 @@ pub struct EckoConfig {
     pub import_rules: Vec<ImportRule>,
     pub custom_checks: Vec<CustomCheck>,
     pub fix_suggestions: bool,
+    pub pattern_threshold: usize,
     /// Guard metadata -- populated by merge logic, not from ecko.yaml.
     #[serde(skip)]
     pub guard_meta: Option<GuardMeta>,
@@ -153,6 +154,7 @@ impl Default for EckoConfig {
             import_rules: Vec::new(),
             custom_checks: Vec::new(),
             fix_suggestions: true,
+            pattern_threshold: 3,
             guard_meta: None,
         }
     }

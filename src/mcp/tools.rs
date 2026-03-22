@@ -108,6 +108,14 @@ pub fn status(cwd: &str) -> String {
     lines.push(format!("Output format: {}", cfg.output_format));
     lines.push(format!("Session hours: {}", cfg.session_hours));
     lines.push(format!("Fix suggestions: {}", cfg.fix_suggestions));
+    lines.push(format!(
+        "Pattern threshold: {}",
+        if cfg.pattern_threshold == 0 {
+            "disabled".to_string()
+        } else {
+            format!("{} files", cfg.pattern_threshold)
+        }
+    ));
     lines.push(String::new());
     lines.push("Checks:".to_string());
     for check in &all_checks {

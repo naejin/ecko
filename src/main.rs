@@ -18,6 +18,7 @@ mod fix;
 mod formatter;
 mod git;
 mod guard;
+mod hints;
 mod lang;
 mod ledger;
 mod mcp;
@@ -71,8 +72,8 @@ fn main() {
 
     let exit_code = match cli.mode {
         Mode::PostToolUse => {
-            let file = match cli.file {
-                Some(f) => f,
+            let (file, edit_ctx) = match cli.file {
+                Some(f) => (f, None),
                 None => {
                     // Read from stdin (hook pipes JSON input).
                     let mut input = String::new();
@@ -80,12 +81,26 @@ fn main() {
                         process::exit(0);
                     }
                     match serde_json::from_str::<serde_json::Value>(&input) {
-                        Ok(val) => val
-                            .get("file_path")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                        Err(_) => String::new(),
+                        Ok(val) => {
+                            let fp = val
+                                .get("file_path")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            // Extract edit context for diff-scoped checking.
+                            // Edit tool sends old_string + new_string; Write tool sends content.
+                            let ctx = match (
+                                val.get("old_string").and_then(|v| v.as_str()),
+                                val.get("new_string").and_then(|v| v.as_str()),
+                            ) {
+                                (Some(_), Some(ns)) => Some(runner::EditContext {
+                                    new_string: ns.to_string(),
+                                }),
+                                _ => None, // Write tool or missing fields: no filtering
+                            };
+                            (fp, ctx)
+                        }
+                        Err(_) => (String::new(), None),
                     }
                 }
             };
@@ -98,7 +113,7 @@ fn main() {
             } else {
                 file
             };
-            runner::run_post_tool_use(&file, &cli.cwd, &cli.plugin_root)
+            runner::run_post_tool_use(&file, &cli.cwd, &cli.plugin_root, edit_ctx)
         }
         Mode::Stop => {
             let files_override: Option<Vec<String>> = cli.files.map(|f| {

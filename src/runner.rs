@@ -16,9 +16,61 @@ use crate::echo::{self, Echo};
 use crate::external;
 use crate::formatter;
 use crate::git;
+use crate::hints;
 use crate::lang::{self, Lang};
 use crate::ledger;
 use crate::suppress;
+
+// ---------------------------------------------------------------------------
+// EditContext -- diff-scoped checking
+// ---------------------------------------------------------------------------
+
+/// Edit tool context extracted from hook stdin JSON.
+///
+/// Contains the `new_string` from an Edit tool invocation. Used to compute
+/// which lines the agent actually changed, so we only report echoes within
+/// the changed range.
+pub struct EditContext {
+    pub new_string: String,
+}
+
+/// Compute the set of 1-based line numbers covered by `new_string` in `source`.
+///
+/// Finds the first occurrence of `new_string` in the post-edit source and returns
+/// the line numbers it spans. Returns `None` if `new_string` is empty or not found
+/// (defensive fallback: caller should not filter echoes).
+fn compute_changed_lines(source: &str, edit: &EditContext) -> Option<HashSet<usize>> {
+    if edit.new_string.is_empty() {
+        // Deletion -- no new lines to check.
+        return Some(HashSet::new());
+    }
+
+    let start_byte = source.find(&edit.new_string)?;
+    // end_byte is exclusive (one past last byte). Use saturating_sub(1) to get the
+    // last inclusive byte so a trailing newline doesn't bleed into the next line.
+    let last_byte = start_byte + edit.new_string.len().saturating_sub(1);
+
+    // Build line-start offset table (same approach as universal.rs:build_line_starts).
+    let mut line_starts = vec![0usize];
+    for (i, b) in source.bytes().enumerate() {
+        if b == b'\n' {
+            line_starts.push(i + 1);
+        }
+    }
+
+    // Convert byte range to 1-based line numbers.
+    let start_line = match line_starts.binary_search(&start_byte) {
+        Ok(idx) => idx + 1,
+        Err(idx) => idx,
+    };
+    let end_line = match line_starts.binary_search(&last_byte) {
+        Ok(idx) => idx + 1,
+        Err(idx) => idx,
+    };
+
+    let lines: HashSet<usize> = (start_line..=end_line).collect();
+    Some(lines)
+}
 
 // ---------------------------------------------------------------------------
 // StopResult -- structured output from run_stop_inner()
@@ -132,10 +184,19 @@ pub fn is_excluded_with_globset(
 
 /// PostToolUse mode -- per-file Layer 1 + Layer 2 checks after Write/Edit.
 ///
+/// When `edit_ctx` is `Some`, only echoes on changed lines are reported (diff-scoped).
+/// When `edit_ctx` is `None` (Write tool or missing context), all echoes are reported.
+///
 /// Returns 1 if echoes were found, 0 if clean.
-pub fn run_post_tool_use(file_path: &str, cwd: &str, plugin_root: &str) -> i32 {
+pub fn run_post_tool_use(
+    file_path: &str,
+    cwd: &str,
+    plugin_root: &str,
+    edit_ctx: Option<EditContext>,
+) -> i32 {
     debug::debug(&format!(
-        "run_post_tool_use: file={file_path}, cwd={cwd}, plugin_root={plugin_root}"
+        "run_post_tool_use: file={file_path}, cwd={cwd}, plugin_root={plugin_root}, has_edit_ctx={}",
+        edit_ctx.is_some()
     ));
 
     // 1. Load config
@@ -185,8 +246,33 @@ pub fn run_post_tool_use(file_path: &str, cwd: &str, plugin_root: &str) -> i32 {
         }
     };
 
+    // 7a. Compute changed lines for diff-scoped checking (after autofix re-read).
+    let changed_lines = edit_ctx
+        .as_ref()
+        .and_then(|ctx| compute_changed_lines(&source, ctx));
+    if let Some(ref lines) = changed_lines {
+        debug::debug(&format!("diff-scope: changed lines = {:?}", lines));
+    }
+
     // 8. Layer 2: run checks
     let echoes = checks::run_layer2_checks(file_path, language, &source, cwd, &config);
+
+    // 8a. Diff-scope filter: only keep echoes on changed lines (Edit tool).
+    let echoes = if let Some(ref lines) = changed_lines {
+        let before = echoes.len();
+        let filtered: Vec<Echo> = echoes
+            .into_iter()
+            .filter(|e| lines.contains(&e.line))
+            .collect();
+        debug::debug(&format!(
+            "diff-scope: {} echoes filtered to {} on changed lines",
+            before,
+            filtered.len()
+        ));
+        filtered
+    } else {
+        echoes
+    };
 
     // 9. Filter suppressed (ecko:ignore)
     let echoes = suppress::filter_suppressed(echoes, file_path);
@@ -197,12 +283,22 @@ pub fn run_post_tool_use(file_path: &str, cwd: &str, plugin_root: &str) -> i32 {
         .filter(|e| !disabled.contains(&e.check))
         .collect();
 
-    // 10a. Strip fix suggestions if disabled in config.
+    // 10a. Enrich echoes with contextual suggestions.
+    for e in &mut echoes {
+        if e.suggestion.is_empty() {
+            let hint = hints::contextual_suggestion(&e.check, file_path, &e.message);
+            if !hint.is_empty() {
+                e.suggestion = hint;
+            }
+        }
+    }
+
+    // 10b. Strip fix suggestions if disabled in config.
     if !config.fix_suggestions {
         echoes.iter_mut().for_each(|e| e.fix = None);
     }
 
-    // 10b. Apply per-check echo cap.
+    // 10c. Apply per-check echo cap.
     let echoes = echo::apply_per_check_cap(echoes, config.echo_cap_per_check);
 
     // 11. Record to session ledger (best-effort, never blocks the hook)
@@ -230,7 +326,70 @@ pub fn run_post_tool_use(file_path: &str, cwd: &str, plugin_root: &str) -> i32 {
         echo::emit(&output);
     }
 
+    // 12a. Session pattern detection: emit behavioral directives AFTER echoes
+    // so the agent sees the immediate fix first, then the behavioral nudge.
+    if config.pattern_threshold > 0 && config.session_hours > 0.0 {
+        if let Some(directives) = detect_session_patterns(cwd, &rel, &config) {
+            for d in directives {
+                echo::emit(&d);
+            }
+        }
+    }
+
     1
+}
+
+// ---------------------------------------------------------------------------
+// Session pattern detection
+// ---------------------------------------------------------------------------
+
+/// Detect checks that have fired on `threshold` distinct files in this session.
+///
+/// Returns formatted directive strings for checks that hit exactly the threshold
+/// (emits once per check per session). Returns `None` on ledger read failure.
+fn detect_session_patterns(
+    cwd: &str,
+    current_file: &str,
+    config: &config::EckoConfig,
+) -> Option<Vec<String>> {
+    let entries = ledger::read_session(cwd, config.session_hours);
+    if entries.is_empty() {
+        return None;
+    }
+
+    let threshold = config.pattern_threshold;
+
+    // Count distinct files per check (exclude current file -- it was just appended).
+    let mut check_files: HashMap<String, HashSet<String>> = HashMap::new();
+    for entry in &entries {
+        if entry.mode != "post-tool-use" || entry.file == current_file {
+            continue;
+        }
+        for check_name in entry.echoes.keys() {
+            check_files
+                .entry(check_name.clone())
+                .or_default()
+                .insert(entry.file.clone());
+        }
+    }
+
+    let mut directives = Vec::new();
+    for (check, files) in &check_files {
+        if files.len() == threshold {
+            let hint = hints::pattern_directive(check);
+            directives.push(format!(
+                "~~ ecko ~~ pattern: '{}' flagged in {} files this session -- {}",
+                check, threshold, hint
+            ));
+        }
+    }
+
+    if directives.is_empty() {
+        None
+    } else {
+        directives.sort(); // Deterministic output order
+        Some(directives)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -730,4 +889,239 @@ pub fn run_dry_run(file_path: &str, cwd: &str, plugin_root: &str) -> i32 {
 
 fn relative_path(file_path: &str, cwd: &str) -> String {
     git::relative_path(file_path, cwd)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- compute_changed_lines tests ---
+
+    #[test]
+    fn test_changed_lines_simple_edit() {
+        let source = "line1\nline2\nline3\nline4\nline5\n";
+        let edit = EditContext {
+            new_string: "line3".to_string(),
+        };
+        let lines = compute_changed_lines(source, &edit).unwrap();
+        assert!(lines.contains(&3));
+        assert!(!lines.contains(&2));
+        assert!(!lines.contains(&4));
+    }
+
+    #[test]
+    fn test_changed_lines_multiline_edit() {
+        let source = "aaa\nbbb\nccc\nddd\neee\n";
+        let edit = EditContext {
+            new_string: "bbb\nccc\nddd".to_string(),
+        };
+        let lines = compute_changed_lines(source, &edit).unwrap();
+        assert!(lines.contains(&2));
+        assert!(lines.contains(&3));
+        assert!(lines.contains(&4));
+        assert!(!lines.contains(&1));
+        assert!(!lines.contains(&5));
+    }
+
+    #[test]
+    fn test_changed_lines_edit_at_start() {
+        let source = "NEW\nline2\nline3\n";
+        let edit = EditContext {
+            new_string: "NEW".to_string(),
+        };
+        let lines = compute_changed_lines(source, &edit).unwrap();
+        assert!(lines.contains(&1));
+        assert!(!lines.contains(&2));
+    }
+
+    #[test]
+    fn test_changed_lines_edit_at_end() {
+        let source = "line1\nline2\nNEW\n";
+        let edit = EditContext {
+            new_string: "NEW".to_string(),
+        };
+        let lines = compute_changed_lines(source, &edit).unwrap();
+        assert!(lines.contains(&3));
+        assert!(!lines.contains(&2));
+    }
+
+    #[test]
+    fn test_changed_lines_empty_new_string() {
+        let source = "line1\nline2\n";
+        let edit = EditContext {
+            new_string: String::new(),
+        };
+        let lines = compute_changed_lines(source, &edit).unwrap();
+        assert!(lines.is_empty(), "deletion should yield empty set");
+    }
+
+    #[test]
+    fn test_changed_lines_not_found() {
+        let source = "line1\nline2\n";
+        let edit = EditContext {
+            new_string: "NONEXISTENT".to_string(),
+        };
+        assert!(
+            compute_changed_lines(source, &edit).is_none(),
+            "should return None when new_string not found"
+        );
+    }
+
+    #[test]
+    fn test_changed_lines_multiple_occurrences_uses_first() {
+        let source = "dup\nline2\ndup\n";
+        let edit = EditContext {
+            new_string: "dup".to_string(),
+        };
+        let lines = compute_changed_lines(source, &edit).unwrap();
+        assert!(lines.contains(&1), "should match first occurrence");
+        // Line 3 also has "dup" but we should only match line 1
+        assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
+    fn test_changed_lines_trailing_newline_no_bleed() {
+        // "aaa\n" covers only line 1, should NOT include line 2
+        let source = "aaa\nbbb\nccc\n";
+        let edit = EditContext {
+            new_string: "aaa\n".to_string(),
+        };
+        let lines = compute_changed_lines(source, &edit).unwrap();
+        assert!(lines.contains(&1));
+        assert!(
+            !lines.contains(&2),
+            "trailing newline must not bleed into next line"
+        );
+    }
+
+    #[test]
+    fn test_changed_lines_single_char() {
+        let source = "a\nb\nc\n";
+        let edit = EditContext {
+            new_string: "b".to_string(),
+        };
+        let lines = compute_changed_lines(source, &edit).unwrap();
+        assert_eq!(lines, HashSet::from([2]));
+    }
+
+    // --- detect_session_patterns tests ---
+
+    #[test]
+    fn test_detect_patterns_below_threshold() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_str().unwrap();
+
+        // Record 2 files with bare-except (below threshold of 3)
+        let mut echoes = HashMap::new();
+        echoes.insert("bare-except".to_string(), 1_usize);
+        ledger::append(cwd, &format!("{}/a.py", cwd), "post-tool-use", &echoes);
+        ledger::append(cwd, &format!("{}/b.py", cwd), "post-tool-use", &echoes);
+
+        let config = config::EckoConfig {
+            pattern_threshold: 3,
+            ..config::EckoConfig::default()
+        };
+        let result = detect_session_patterns(cwd, "c.py", &config);
+        assert!(
+            result.is_none(),
+            "2 files < threshold 3, no directive expected"
+        );
+    }
+
+    #[test]
+    fn test_detect_patterns_at_threshold() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_str().unwrap();
+
+        let mut echoes = HashMap::new();
+        echoes.insert("bare-except".to_string(), 1_usize);
+        ledger::append(cwd, &format!("{}/a.py", cwd), "post-tool-use", &echoes);
+        ledger::append(cwd, &format!("{}/b.py", cwd), "post-tool-use", &echoes);
+        ledger::append(cwd, &format!("{}/c.py", cwd), "post-tool-use", &echoes);
+
+        let config = config::EckoConfig {
+            pattern_threshold: 3,
+            ..config::EckoConfig::default()
+        };
+        // current_file is "d.py" (not in the ledger, so all 3 count)
+        let result = detect_session_patterns(cwd, "d.py", &config);
+        assert!(
+            result.is_some(),
+            "3 files == threshold 3, directive expected"
+        );
+        let directives = result.unwrap();
+        assert_eq!(directives.len(), 1);
+        assert!(directives[0].contains("bare-except"));
+        assert!(directives[0].contains("pattern"));
+    }
+
+    #[test]
+    fn test_detect_patterns_above_threshold_no_repeat() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_str().unwrap();
+
+        let mut echoes = HashMap::new();
+        echoes.insert("bare-except".to_string(), 1_usize);
+        for name in &["a.py", "b.py", "c.py", "d.py"] {
+            ledger::append(cwd, &format!("{}/{}", cwd, name), "post-tool-use", &echoes);
+        }
+
+        let config = config::EckoConfig {
+            pattern_threshold: 3,
+            ..config::EckoConfig::default()
+        };
+        let result = detect_session_patterns(cwd, "e.py", &config);
+        assert!(
+            result.is_none(),
+            "4 files > threshold 3, directive should NOT repeat"
+        );
+    }
+
+    #[test]
+    fn test_detect_patterns_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_str().unwrap();
+
+        let mut echoes = HashMap::new();
+        echoes.insert("bare-except".to_string(), 1_usize);
+        for name in &["a.py", "b.py", "c.py"] {
+            ledger::append(cwd, &format!("{}/{}", cwd, name), "post-tool-use", &echoes);
+        }
+
+        let config = config::EckoConfig {
+            pattern_threshold: 0,
+            ..config::EckoConfig::default()
+        };
+        // threshold 0 means caller should never call detect_session_patterns,
+        // but if called, it uses 0 which no check can match
+        let result = detect_session_patterns(cwd, "d.py", &config);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_detect_patterns_excludes_current_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_str().unwrap();
+
+        let mut echoes = HashMap::new();
+        echoes.insert("bare-except".to_string(), 1_usize);
+        ledger::append(cwd, &format!("{}/a.py", cwd), "post-tool-use", &echoes);
+        ledger::append(cwd, &format!("{}/b.py", cwd), "post-tool-use", &echoes);
+        // Third entry is the current file -- should be excluded
+        ledger::append(cwd, &format!("{}/c.py", cwd), "post-tool-use", &echoes);
+
+        let config = config::EckoConfig {
+            pattern_threshold: 3,
+            ..config::EckoConfig::default()
+        };
+        let result = detect_session_patterns(cwd, "c.py", &config);
+        assert!(
+            result.is_none(),
+            "only 2 files after excluding current file, below threshold"
+        );
+    }
 }
