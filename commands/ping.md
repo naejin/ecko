@@ -11,6 +11,6 @@ Steps:
 1. Determine the target file. If the user provided a file path in the arguments, use that. Otherwise, find the most recently modified tracked file using `git diff --name-only HEAD` or `git log -1 --name-only`.
 2. Run the ecko checker:
    ```
-   python3 ${CLAUDE_PLUGIN_ROOT}/checks/runner.py --file <FILE> --mode post-tool-use --cwd $(pwd) --plugin-root ${CLAUDE_PLUGIN_ROOT}
+   ${CLAUDE_PLUGIN_ROOT}/scripts/run.sh --file <FILE> --mode post-tool-use --cwd $(pwd) --plugin-root ${CLAUDE_PLUGIN_ROOT}
    ```
 3. Show the output to the user. If there are no echoes, say the file is clean.

@@ -1,5 +1,60 @@
 # Changelog
 
+## v2.0.0
+
+Complete rewrite -- Rust + tree-sitter replaces the Python + external-tool architecture.
+
+### Breaking changes
+
+- **Rust binary replaces Python runner** -- all hooks now invoke the compiled `ecko` binary
+  instead of `python3 checks/runner.py`. Install scripts download a platform-specific binary.
+- **Removed config keys** -- `ruff_use_project_config`, `biome_use_project_config`, and
+  `ruff_extra_rules` are no longer supported. All checks are native (tree-sitter-based),
+  so external tool configuration is not applicable.
+- **New config keys** -- `custom_checks` (user-defined tree-sitter query checks in ecko.yaml)
+  and `fix_suggestions` (bool, default true -- whether to include fix suggestions in echoes).
+
+### New features
+
+- **28 native checks** -- all core checks are tree-sitter queries compiled into the binary.
+  No external tool dependencies for core checks (ruff, biome, vulture, knip no longer required).
+  - Python (12): unused-imports, singleton-comparison, bare-except, star-imports,
+    mutable-default-args, builtin-shadowing, placeholder-code, unreachable-code,
+    duplicate-keys, test-conditional, fixed-wait, mock-spec-bypass
+  - JS/TS (8): unused-imports, unreachable-code, debugger-statement, no-var,
+    duplicate-keys, empty-block-statements, useless-catch, placeholder-code
+  - Go (4): unused-imports, empty-error-check, unreachable-code, placeholder-code
+  - Rust (4): unused-imports, todo-macro, unreachable-code, placeholder-code
+  - Universal (3+): unicode-artifacts, banned-patterns, import-layers
+- **MCP server** -- `--mode mcp-server` exposes 5 tools via the Model Context Protocol:
+  `check_file`, `check_workspace`, `status`, `dry_run`, `explain`. Inline `mcpServers`
+  config in plugin.json (no separate `.mcp.json` file needed).
+- **Go and Rust language support** -- 4 native checks each, plus optional external adapters
+  (golangci-lint, clippy) for deep analysis.
+- **Fix suggestions** -- checks can emit inline fix suggestions (byte-range replacements).
+  Controlled via `fix_suggestions` config key (default true).
+- **Custom tree-sitter checks** -- define project-specific checks in ecko.yaml using
+  tree-sitter query syntax via the `custom_checks` config key.
+- **SessionStats CLI mode** -- `--mode session-stats` for the `/ecko:session` command.
+- **Binary distribution** -- GitHub Releases ships pre-built binaries for 5 platforms
+  (linux-x64, linux-arm64, macos-x64, macos-arm64, windows-x64). Checksum verification
+  on binary downloads.
+- **Inline suppression** -- `ecko:ignore` comment syntax carried forward from v1.
+
+### Architecture
+
+- **tree-sitter queries** -- `.scm` files in `queries/` embedded at compile time via
+  `include_str!()`. Single static binary, no external files.
+- **Rayon parallelism** -- stop mode runs checks across files in parallel.
+- **Regex crate** -- inherently ReDoS-safe (no thread-based timeouts needed).
+- **Guard patterns** -- lazy-compiled via `LazyLock` (compiled once per process).
+- **External adapters** -- pyright, tsc, golangci-lint, clippy still available as optional
+  subprocess adapters in `src/external/`.
+
+### Tests
+
+- 283 Rust unit tests (~0.9s). Replaces the Python test suite (568 tests in v1.3.0).
+
 ## v1.3.0
 
 Intelligence — project fingerprinting and dry-run introspection.

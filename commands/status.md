@@ -1,58 +1,51 @@
 ---
-description: "Show ecko status — available tools, config, and check list"
+description: "Show ecko status -- available checks, config, and language support"
 allowed-tools: ["Bash", "Read"]
 ---
 
-Show the current ecko configuration and which tools are available.
+Show the current ecko configuration and which checks are available.
 
 Steps:
-1. Check which tools are installed by running `which` for each:
-   - Layer 1: `black`, `isort`, `prettier`
-   - Layer 2: `ruff`, `biome`
-   - Layer 3: `tsc`, `pyright`, `vulture`
-   - Also check: `npx` (for knip)
+1. Run ecko dry-run to list available checks:
+   ```bash
+   ${CLAUDE_PLUGIN_ROOT}/scripts/run.sh --mode dry-run --file dummy.py --cwd $(pwd) --plugin-root ${CLAUDE_PLUGIN_ROOT} 2>&1
+   ```
 
-2. Check if `ecko.yaml` exists in the current directory. If so, read it and summarize:
-   - Autofix settings
-   - Deep analysis settings
-   - Number of banned patterns
-   - Number of obsolete terms
+2. Check which optional external deep analysis tools are installed:
+   - `pyright` (Python type checking)
+   - `tsc` (TypeScript type checking)
+   - `golangci-lint` (Go linting)
+   - `clippy` (Rust linting)
+
+3. Check if `ecko.yaml` exists in the current directory. If so, read it and summarize:
    - Disabled checks
+   - Banned patterns count
+   - Obsolete terms count
+   - Import rules count
+   - Blocked commands count
+   - Custom checks count
+   - Session hours
+   - Output format
 
-3. Show the **effective config** including defaults, so users know what's active:
+4. Show the **effective config** including defaults:
 
 ```
 ~~ ecko status ~~
 
-Layer 1 (auto-fix):
-  black       ✓ installed
-  isort       ✓ installed
-  prettier    ✗ not found
+Version: 2.0.0
+Core checks: 28 native (tree-sitter)
+Languages: Python, JavaScript, TypeScript, Go, Rust
 
-Layer 2 (echoes):
-  ruff        ✓ installed
-  biome       ✗ not found
+External adapters (optional):
+  pyright     [installed/not found]
+  tsc         [installed/not found]
+  golangci    [installed/not found]
+  clippy      [installed/not found]
 
-Layer 3 (deep analysis):
-  tsc         ✓ installed
-  pyright     ✓ installed
-  vulture     ✗ not found
-  knip (npx)  ✓ available
-
-Config: ecko.yaml found
-  Autofix: enabled
-  Disabled checks: none
-  Banned patterns: 2
-  Obsolete terms: 1
-
-Effective config:
+Config: ecko.yaml [found/not found]
+  disabled_checks: []
+  banned_patterns: 0
   echo_cap_per_check: 5 (default)
-  builtin_shadow_allowlist: [type, help, input, ...] (20 items, default)
-  disabled_checks: [] (none)
-  exclude: [fixtures/*, node_modules/*] + built-in defaults
-  import_rules: 0 rules
-  blocked_commands: 0 user patterns (+ 6 built-in)
-  reverb: disabled
 ```
 
-Missing tools are fine — ecko gracefully skips them. Suggest `/ecko:setup` if many tools are missing.
+Missing external tools are fine -- ecko's 28 core checks are native and always available. Suggest `/ecko:setup` if the user wants to install external adapters.

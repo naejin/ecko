@@ -5,14 +5,15 @@ A Claude Code plugin providing deterministic code quality checks via hooks.
 Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysis on stop (Layer 3).
 
 ## Structure
-- `.claude-plugin/plugin.json` — plugin manifest
+- `.claude-plugin/plugin.json` — plugin manifest (includes inline `mcpServers` for MCP server entry point)
 - `hooks/hooks.json` — PreToolUse(Bash, ExitPlanMode) + PostToolUse(Write|Edit) + Stop hook wiring
-- `hooks/*.sh` — shell entry points that delegate to `checks/runner.py`
-- `checks/` — Python package: runner, config, result, formatter, regex_utils, fileutil, debug, ledger, bash_guard, git, fingerprint, session_stats, tools/, custom/
+- `hooks/*.sh` — shell entry points that find and invoke the Rust binary (binary resolution shared via `hooks/_find_ecko.sh`)
+- `scripts/run.sh` / `scripts/run.cmd` — 3-tier binary launcher (pre-built -> cargo build -> GitHub Release download)
+- `scripts/install.sh` / `scripts/install.ps1` — marketplace installer + binary acquisition
+- `src/` — Rust source (see "Rust structure" section below)
+- `queries/` — tree-sitter `.scm` query files (embedded at compile time)
 - `commands/` — slash commands (ping, status, setup, tune, reverb, session)
-- `config/biome.json` — biome lint config (only ecko's rules enabled)
-- `scripts/` — install scripts (bash + powershell)
-- `tests/` — pytest suite with fixtures/
+- `checks/` — legacy Python package (v1, hooks no longer use this)
 - `ecko.yaml.example` — full config reference (check names, banned patterns, etc.)
 - `CHANGELOG.md` — version history for all releases
 
@@ -147,17 +148,17 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - CI matrix: `{ubuntu, macos, windows} × {Python 3.10, 3.12}` — 6 jobs total (`.github/workflows/test.yml`)
 
 ## Releasing
-- Bump `version` in `.claude-plugin/plugin.json` — marketplace reads version from here, not git tags
+- Bump `version` in both `.claude-plugin/plugin.json` AND `Cargo.toml`
 - Update version badge in `README.md`
 - Add entry to `CHANGELOG.md`
-- Push and wait for CI green on all 6 matrix jobs before tagging
-- If CI fails, fix and push again — do NOT tag until all 6 jobs are green (the v0.6.0 release needed a Windows CI fix before tagging)
+- Push and wait for CI green on all 3 Rust matrix jobs before tagging
+- If CI fails, fix and push again -- do NOT tag until all 3 jobs are green
 - Tag, push tag, `gh release create v{X} --title "..." --notes-file /tmp/release-notes.md` (flag is `-F`/`--notes-file`, NOT `--body`)
-- Verify with: `curl -fsSL https://raw.githubusercontent.com/naejin/ecko/main/scripts/install.sh | bash`
+- Release CI (release.yml) triggers on tag push: builds 5 targets, validates artifacts, publishes GitHub Release with checksums
+- Verify with: `curl -fsSL https://github.com/naejin/ecko/releases/latest/download/install.sh | bash`
 - Update `commands/` listing in Structure section of CLAUDE.md if adding/removing commands
 - Update commands table in README.md if adding/removing commands
-- Update `docs/ideas/ideas-done.md` and `ideas-todo.md`
-- CHANGELOG test count must match actual `pytest` output (currently 568)
+- CHANGELOG test count must match actual `cargo test` output (currently 283)
 - Update test count in both CHANGELOG.md AND CLAUDE.md after final stabilization, not after initial implementation (review rounds add tests)
 - Update README.md checks tables when adding new checks
 
@@ -248,9 +249,138 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `run_dry_run()` in runner.py, outputs to stdout (informational, not a hook)
 
 ## Current version and next milestone
-- Current: v1.3.0 (fingerprinting + dry-run)
-- Previous: v0.9.1 (noise reduction)
+- Current: v2.0.0 (Rust rewrite with tree-sitter + MCP server)
+- Previous: v1.3.0 (Python, fingerprinting + dry-run)
 
 ## Not part of the plugin
 - `docs/ideas/` — internal ideation (gitignored)
 - `openspec/`, `.claude/` — dev workflow tooling, not distributed
+
+---
+
+# Ecko v2 — Rust Rewrite
+
+## What changed
+v2.0.0 rewrites ecko from Python to Rust with tree-sitter as the analysis engine.
+All checks are native (no external tool dependencies for core checks). MCP server mode added.
+The Python code in `checks/` still exists but hooks now point to the Rust binary.
+
+## Rust structure
+- `Cargo.toml` — dependencies: tree-sitter grammars (py/js/ts/go/rs), regex, serde, clap, rayon, rmcp
+- `src/main.rs` — CLI: `--mode {post-tool-use,stop,pre-tool-use-bash,dry-run,mcp-server}`
+- `src/runner.rs` — orchestrator: `run_post_tool_use()`, `run_stop()`, `run_dry_run()`
+- `src/config.rs` — `ecko.yaml` via serde_yaml, `EckoConfig` struct with all accessors
+- `src/echo.rs` — `Echo` struct (with `Fix` + `Severity`), compact text + JSON formatters, `emit()`
+- `src/lang.rs` — `Lang` enum, `detect_language()`, `parse_for_checks()`, `is_test_file()`
+- `src/query_engine.rs` — `QueryCheck` struct, `compile_query()`, `run_query()`, `capture_index_or_skip()`
+- `src/checks/` — per-language check modules: `python.rs`, `javascript.rs`, `go.rs`, `rust_checks.rs`, `universal.rs`, `custom.rs`, `dead_code.rs`
+- `src/external/` — optional subprocess adapters: `pyright.rs`, `tsc.rs`, `golangci.rs`, `clippy.rs`
+- `src/mcp/` — MCP server via rmcp: `mod.rs` (ServerHandler), `tools.rs` (check_file, status, explain, etc.)
+- `src/ledger.rs` — session JSONL ledger (append-only, same schema as Python)
+- `src/guard.rs` — bash command guard (regex, lazy-compiled via `LazyLock`)
+- `src/git.rs` — `get_modified_files()` via git subprocess
+- `src/fix.rs` — fix suggestion generation (byte-range replacements)
+- `src/fingerprint.rs` — framework detection from dependency files
+- `src/formatter.rs` — Layer 1 autofix (trailing whitespace + optional black/prettier)
+- `src/suppress.rs` — `ecko:ignore` inline comment suppression
+- `src/debug.rs` — `ECKO_DEBUG=1` stderr output via `OnceLock`
+- `queries/` — tree-sitter `.scm` files embedded at compile time via `include_str!()`
+- `.claude-plugin/.mcp.json` — MCP server config for Claude Code
+
+## Rust build + test
+- Build: `cargo build --release` (8.2MB binary, ~30s)
+- Test: `cargo test` (283 tests, ~1s)
+- Check: `cargo check` (fast type-check without codegen)
+- Smoke test: `target/release/ecko --mode post-tool-use --file <path> --cwd <dir> --plugin-root .`
+- Bash guard: `echo "COMMAND" | target/release/ecko --mode pre-tool-use-bash --cwd . --plugin-root .`
+- Dry-run: `target/release/ecko --mode dry-run --file <path> --cwd <dir> --plugin-root .`
+- Session stats: `target/release/ecko --mode session-stats --cwd <dir> --plugin-root .`
+- JSON output: set `output_format: json` in ecko.yaml
+- Debug mode: `ECKO_DEBUG=1 target/release/ecko --mode post-tool-use ...`
+- MCP smoke test: `printf '...' | target/release/ecko --mode mcp-server` (should register 5 tools)
+
+## Binary distribution
+- `scripts/run.sh` / `scripts/run.cmd`: 3-tier launcher (pre-built binary -> cargo build -> GitHub Release download)
+- Hooks do NOT use run.sh (tight timeouts, graceful degradation to exit 0 if binary missing)
+- run.sh is for: MCP server entry point (plugin.json mcpServers), slash commands, install script
+- plugin.json has inline `mcpServers` (no separate .mcp.json -- avoids path conflicts)
+- Release CI: 5-target matrix (linux x86_64/aarch64, macos x86_64/aarch64, windows x86_64)
+- Checksum verification: run.sh (sha256sum/shasum) and run.cmd (PowerShell Get-FileHash) verify checksums before executing downloaded binary
+- Hooks have tight timeouts (PostToolUse: 30s, PreToolUseBash: 10s, Stop: 120s) -- never add network I/O or cargo builds to hook scripts
+- Windows release CI overwrites plugin.json `mcpServers.ecko.command` to point to `run.cmd` instead of `run.sh`
+- CI lint job: `cargo fmt --check` + `cargo clippy -- -D warnings` runs on every push/PR (`.github/workflows/test.yml`)
+
+## Rust design constraints
+- `EckoConfig` fields are public (`cfg.session_hours`, `cfg.disabled_checks`) -- access directly, no getter methods
+- tree-sitter queries embedded via `include_str!()` — single binary, no external files
+- `parse_for_checks(lang, source)` in lang.rs — use this instead of manually creating parser+tree
+- `capture_index_or_skip(query, name)` in query_engine.rs — returns `usize::MAX` on missing capture (safe no-match sentinel), never `unwrap_or(0)` which silently uses wrong capture
+- `Severity` derives `Copy` — use `Severity::Warn` / `Severity::Error` directly, never `.clone()`
+- Rust `regex` crate is inherently ReDoS-safe — no thread-based timeouts needed (unlike Python)
+- Guard patterns lazy-compiled via `LazyLock<Vec<(Regex, &str)>>` — compiled once per process
+- `run_with_timeout(cmd, timeout, tool_name)` in external/mod.rs drains stdout/stderr via threads to prevent pipe buffer deadlock; emits user-facing "not found" vs "timed out" messages
+- GlobSet for user excludes pre-compiled once in `run_stop()`, passed to filter functions
+- Session stats only emitted when ledger has entries (silent on first run)
+- All output goes to stderr via `echo::emit()` — stdout only for dry-run/informational modes
+- `--force-with-lease --force` bypass: strip `--force-with-lease` then check for standalone `--force`
+
+## Rust check inventory (28 native checks)
+- Python (12): unused-imports, singleton-comparison, bare-except, star-imports, mutable-default-args, builtin-shadowing, placeholder-code, unreachable-code, duplicate-keys, test-conditional, fixed-wait, mock-spec-bypass
+- JS/TS (8): unused-imports, unreachable-code, debugger-statement, no-var, duplicate-keys, empty-block-statements, useless-catch, placeholder-code
+- Go (4): unused-imports, empty-error-check, unreachable-code, placeholder-code
+- Rust (4): unused-imports, todo-macro, unreachable-code, placeholder-code
+- Universal (3+): unicode-artifacts, banned-patterns, import-layers
+- External optional: pyright, tsc, golangci-lint, clippy
+
+## Adding a Rust check
+1. Create tree-sitter query in `queries/<lang>/<check>.scm`
+2. Add check function in `src/checks/<lang>.rs` using `parse_for_checks()` + `compile_query()` + `capture_index_or_skip()`
+3. Wire into `run_checks()` in that module
+4. Add check name to `list_applicable_checks()` in `src/checks/mod.rs`
+5. Add check name to `mcp/tools.rs` `status()` and `explain()` functions
+6. Add unit test with inline source string
+
+## Rust v2 config changes (vs Python v1)
+- Removed: `ruff_use_project_config`, `biome_use_project_config`, `ruff_extra_rules`
+- Added: `custom_checks` (tree-sitter query checks in ecko.yaml), `fix_suggestions` (bool, default true)
+- Kept: `disabled_checks`, `exclude`, `banned_patterns`, `obsolete_terms`, `blocked_commands`, `autofix`, `deep_analysis`, `echo_cap_per_check`, `echo_cap_cross_file`, `session_hours`, `output_format`, `reverb`, `builtin_shadow_allowlist`, `import_rules`
+
+## Incomplete / future work (v2.1)
+- Incremental parsing in MCP server mode (tree-sitter supports it, not implemented)
+- Diff-aware checking (only check changed subtrees)
+
+## Rust code quality gotchas
+- AI agents insert unicode (em dashes, arrows) in doc comments -- always `sed -i 's/\xe2\x80\x94/--/g'` after bulk code generation
+- `relative_path()` lives in `git.rs` -- single source of truth, never duplicate in other modules
+- `canonicalize_or_normalize()` lives in `git.rs` -- shared by clippy and golangci adapters for path matching, never duplicate
+- `explain()` in mcp/tools.rs uses `match` not `HashMap::from` -- zero allocation per call
+- `list_applicable_checks()` uses const arrays per language -- add new checks to the array, not individual pushes
+- `run_stop()` delegates external adapter dispatch to `run_external_adapters()` -- keep orchestration under ~200 lines
+- `collect_all_list()` in dead_code.rs scans from `__all__` position only -- prevents false "used" from strings before `__all__`
+- `run_with_timeout()` joins reader threads on timeout path -- prevents thread leaks
+- `echo::emit()` uses `writeln!` internally -- callers must NOT include trailing `\n` (causes blank lines)
+- Custom check queries validated at config load time via `validate_custom_checks()` -- invalid queries emit immediate warning
+- Self-check: `target/release/ecko --mode post-tool-use --file src/runner.rs --cwd . --plugin-root .` should produce 0 echoes
+
+## Review-fix-converge workflow
+- Launch code-reviewer, code-architect, and code-simplifier agents in parallel
+- Apply fixes, then run convergence review (same 3 agents checking only for regressions)
+- Typically converges in 2 rounds (Round 1: ~25 findings, Round 2: ~8 findings, Round 3: converged)
+- Always rebuild release binary and run self-check after convergence
+
+## rmcp MCP server patterns
+- Parameter structs derive `JsonSchema` from `rmcp::schemars` (v1), NOT standalone `schemars` (v0.8)
+- Use `Parameters<T>` wrapper for tool function params, not `#[tool(param)]` on individual args
+- `ServerHandler::get_info()` returns `InitializeResult`, not `ServerInfo`
+- `rmcp::serde` re-export for Serialize/Deserialize on MCP param types
+- Features needed: `server`, `macros`, `transport-io`
+- `#[tool_handler]` macro on `impl ServerHandler` is REQUIRED for tools/list to work -- without it, `list_tools` returns empty and `call_tool` is a no-op. Import via `use rmcp::tool_handler;`
+- `#[tool_router]` on the impl block defines tools; `#[tool_handler]` on the ServerHandler impl wires them to the protocol -- both are needed
+
+## tree-sitter patterns
+- `streaming_iterator::StreamingIterator` trait needed for `QueryCursor::matches()` iteration (`while let Some(m) = matches.next()`)
+- Capture name comparison: `*name == "match"` (double-deref because `capture_names()` returns `&[&str]`)
+- Grammar crate constants: `tree_sitter_python::LANGUAGE`, `tree_sitter_typescript::LANGUAGE_TYPESCRIPT` / `LANGUAGE_TSX`
+- Convert to `tree_sitter::Language` with `.into()`
+- Node kinds vary by grammar — always debug with `tree.root_node().to_sexp()` when writing new queries
+- Post-filter pattern: query broadly, then filter matches in Rust code (e.g., `except_clause` query → filter to only bare `except:`)

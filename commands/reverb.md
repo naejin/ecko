@@ -15,7 +15,7 @@ Steps:
 
 2. Run ecko stop mode to gather current echoes:
    ```
-   python3 ${CLAUDE_PLUGIN_ROOT}/checks/runner.py --file . --mode stop --cwd $(pwd) --plugin-root ${CLAUDE_PLUGIN_ROOT} 2>&1
+   ${CLAUDE_PLUGIN_ROOT}/scripts/run.sh --mode stop --cwd $(pwd) --plugin-root ${CLAUDE_PLUGIN_ROOT} 2>&1
    ```
 
 3. Generate a slug from the arguments or conversation context. Use 2-4 lowercase words joined by hyphens (e.g., `wrong-import-layer`, `missed-type-error`). Derive from arguments if provided, otherwise infer from the conversation.

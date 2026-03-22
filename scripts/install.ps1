@@ -47,17 +47,35 @@ if ($pluginList -match "$PluginName@$MarketplaceName") {
     }
 }
 
+# Ensure binary is available (download/build on first run)
+$pluginDir = $null
+$hasPy = Get-Command python3 -ErrorAction SilentlyContinue
+if ($hasPy) {
+    $pluginDir = & python3 -c @"
+import json, pathlib
+config_dir = pathlib.Path.home() / '.claude'
+plugins_file = config_dir / 'plugins.json'
+if plugins_file.exists():
+    for p in json.load(open(plugins_file)):
+        if p.get('name') == 'ecko':
+            print(p.get('directory', ''))
+            break
+"@ 2>$null
+}
+
+if ($pluginDir -and (Test-Path "$pluginDir\scripts\run.cmd")) {
+    Write-Info "Downloading ecko binary..."
+    $out = & "$pluginDir\scripts\run.cmd" --version 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Info "Binary ready."
+    } else {
+        Write-Info "Binary download skipped. It will be fetched on first use."
+    }
+}
+
 Write-Host ""
 Write-Info "Ecko installed!"
+Write-Info "No external tools needed - ecko v2 checks are native."
+Write-Info "Optional: install pyright, tsc, golangci-lint, or clippy for deep analysis."
 Write-Info "Restart Claude Code to start using ecko."
 Write-Host ""
-
-# Check for tool runners
-$hasUvx = Get-Command uvx -ErrorAction SilentlyContinue
-$hasNpx = Get-Command npx -ErrorAction SilentlyContinue
-if ($hasUvx -or $hasNpx) {
-    Write-Info "External tools (ruff, biome, etc.) will run automatically via uvx/npx."
-} else {
-    Write-Info "Tip: install uv (https://docs.astral.sh/uv) or Node.js for full tool coverage."
-    Write-Info "Ecko works without them - it just runs fewer checks."
-}

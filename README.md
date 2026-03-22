@@ -1,8 +1,8 @@
 # ecko
 
-[![v1.3.0](https://img.shields.io/badge/version-1.3.0-blue)](https://github.com/naejin/ecko/releases/tag/v1.3.0)
+[![v2.0.0](https://img.shields.io/badge/version-2.0.0-blue)](https://github.com/naejin/ecko/releases/tag/v2.0.0)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-plugin-7c3aed)](https://docs.anthropic.com/en/docs/claude-code)
-[![Python](https://img.shields.io/badge/python-3.10+-3776ab?logo=python&logoColor=white)](https://python.org)
+[![Rust](https://img.shields.io/badge/rust-native-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![TypeScript](https://img.shields.io/badge/typescript-supported-3178c6?logo=typescript&logoColor=white)](https://typescriptlang.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -22,7 +22,7 @@ Ecko echoes mistakes back to the agent at write-time so it self-corrects before 
      Specify an exception type.
 
   3. unicode-artifact (line 12)
-     Em dash (—) found in source code. Likely from copy-pasting LLM output.
+     Em dash found in source code. Likely from copy-pasting LLM output.
      Replace with -- or a regular hyphen.
 ```
 
@@ -31,14 +31,16 @@ Clean code = silence. Problems = echoes.
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/naejin/ecko/main/scripts/install.sh | bash
+curl -fsSL https://github.com/naejin/ecko/releases/latest/download/install.sh | bash
 ```
+
+No Python or Node.js required -- ecko is a single native binary.
 
 <details>
 <summary>Windows (PowerShell)</summary>
 
 ```powershell
-irm https://raw.githubusercontent.com/naejin/ecko/main/scripts/install.ps1 | iex
+irm https://github.com/naejin/ecko/releases/latest/download/install.ps1 | iex
 ```
 </details>
 
@@ -53,60 +55,61 @@ claude plugin install ecko
 
 Restart your Claude Code session for the hooks to take effect.
 
-**No tool installation needed.** Ecko auto-runs tools via [`uvx`](https://docs.astral.sh/uv) (Python tools) and [`npx`](https://docs.npmjs.com/cli/commands/npx) (Node tools) — no global installs, no environment pollution. If you already have tools installed locally, ecko uses those first.
-
 ## How It Works
 
 Ecko hooks into four moments in a Claude Code session:
 
-**Before every Bash command** — dangerous commands are blocked before execution:
+**Before every Bash command** -- dangerous commands are blocked before execution:
 
 ```
-┌─────────────────────────────────────────────┐
-│  Bash guard (PreToolUse)                    │
-│  Blocks: --no-verify, rm -rf /, rm -rf ~,  │
-│  git push --force, git reset --hard,        │
-│  git clean -f + user blocked_commands.      │
-│  Agent never executes the command.          │
-└─────────────────────────────────────────────┘
++---------------------------------------------+
+|  Bash guard (PreToolUse)                    |
+|  Blocks: --no-verify, rm -rf /, rm -rf ~,  |
+|  git push --force, git reset --hard,        |
+|  git clean -f + user blocked_commands.      |
+|  Agent never executes the command.          |
++---------------------------------------------+
 ```
 
-**After every Write/Edit** — your file gets cleaned up and checked:
+**After every Write/Edit** -- your file gets cleaned up and checked:
 
 ```
-┌─────────────────────────────────────────────┐
-│  Layer 1: Auto-fix (silent)                 │
-│  black → isort → prettier → strip trailing  │
-│  whitespace. Modifies file. No output.      │
-├─────────────────────────────────────────────┤
-│  Layer 2: Echoes (per-file)                 │
-│  ruff · biome · duplicate keys ·            │
-│  unreachable code · unicode artifacts ·     │
-│  placeholder code · banned patterns ·       │
-│  test quality.                              │
-│  Reports to agent.                          │
-└─────────────────────────────────────────────┘
++---------------------------------------------+
+|  Layer 1: Auto-fix (silent)                 |
+|  black -> isort -> prettier -> strip        |
+|  trailing whitespace. Modifies file.        |
+|  No output.                                 |
++---------------------------------------------+
+|  Layer 2: Echoes (per-file)                 |
+|  28 native tree-sitter checks:              |
+|  unused imports, singleton comparison,      |
+|  bare except, duplicate keys, unreachable   |
+|  code, unicode artifacts, placeholder       |
+|  code, banned patterns, and more.           |
+|  Reports to agent.                          |
++---------------------------------------------+
 ```
 
-**When the agent exits plan mode** — a nudge to include test steps:
+**When the agent exits plan mode** -- a nudge to include test steps:
 
 ```
-┌─────────────────────────────────────────────┐
-│  Plan check (PreToolUse)                    │
-│  Reminds agent to include test steps        │
-│  for all code changes in the plan.          │
-└─────────────────────────────────────────────┘
++---------------------------------------------+
+|  Plan check (PreToolUse)                    |
+|  Reminds agent to include test steps        |
+|  for all code changes in the plan.          |
++---------------------------------------------+
 ```
 
-**When the agent tries to stop** — a final sweep catches what per-file checks can't:
+**When the agent tries to stop** -- a final sweep catches what per-file checks can't:
 
 ```
-┌─────────────────────────────────────────────┐
-│  Layer 3: Deep analysis                     │
-│  tsc --noEmit · pyright · vulture · knip    │
-│  + Layer 2 re-sweep on all modified files.  │
-│  Blocks agent until issues are fixed.       │
-└─────────────────────────────────────────────┘
++---------------------------------------------+
+|  Layer 3: Deep analysis                     |
+|  Dead-code analysis + Layer 2 re-sweep on   |
+|  all modified files. Optional external      |
+|  adapters: pyright, tsc, golangci-lint,     |
+|  clippy. Blocks agent until issues fixed.   |
++---------------------------------------------+
 ```
 
 ### When Does Each Layer Run?
@@ -115,59 +118,79 @@ Ecko hooks into four moments in a Claude Code session:
 |-------|---------|-------|-------|
 | Bash guard | Before every Bash command | Single command | Instant |
 | Layer 1 (auto-fix) | After every Write/Edit | Single file | <1s |
-| Layer 2 (echoes) | After every Write/Edit | Single file | <2s |
+| Layer 2 (echoes) | After every Write/Edit | Single file | <1s |
 | Plan check | When agent exits plan mode | Plan content | Instant |
-| Layer 3 (deep analysis) | When agent tries to stop | All modified files | 3-15s |
+| Layer 3 (deep analysis) | When agent tries to stop | All modified files | 2-10s |
 
 ## Checks
 
-### Layer 2 — Tool Checks
+All 28 core checks are native -- powered by tree-sitter, with zero external dependencies.
 
-| Check | Tool | Language | What it catches |
-|-------|------|----------|-----------------|
-| `unused-imports` | ruff / biome | py / ts | Unused imports |
-| `singleton-comparison` | ruff | py | `== None` instead of `is None` |
-| `bare-except` | ruff | py | Bare `except:` |
-| `star-imports` | ruff | py | `from x import *` |
-| `mutable-default-args` | ruff | py | `def f(x=[])` |
-| `builtin-shadowing` | ruff | py | Variable shadows builtin (filtered by allowlist) |
-| `empty-error-handlers` | ruff | py | `except: pass` |
-| `empty-block-statements` | biome | ts | Empty `{}` blocks |
-| `unreachable-code` | biome | ts | Code after return/throw |
-| `debugger-statements` | biome | ts | `debugger` |
-| `var-declarations` | biome | ts | `var` usage |
-| `duplicate-keys` | biome | ts | `{a: 1, a: 2}` |
-| `useless-catch` | biome | ts | `catch(e) { throw e }` |
-
-### Layer 2 — Custom Checks (no dependencies)
+### By Language
 
 | Check | Language | What it catches |
 |-------|----------|-----------------|
-| `duplicate-keys` | py | Duplicate `dict` keys via AST |
-| `unreachable-code` | py | Statements after `return`/`raise`/`break`/`continue` |
-| `unicode-artifact` | all | Em dashes, smart quotes, zero-width chars from LLM output |
-| `banned-pattern` | all | Custom regex patterns from `ecko.yaml` |
-| `obsolete-term` | all | Old names that should be renamed |
-| `import-layer` | py / ts | Import boundary violations from `import_rules` config |
-| `placeholder-code` | py / ts | `pass`/`...`/`raise NotImplementedError` sole-body functions; JS `throw new Error("not implemented")` |
+| `unused-imports` | py / js / ts / go / rs | Unused imports |
+| `singleton-comparison` | py | `== None` instead of `is None` |
+| `bare-except` | py | Bare `except:` |
+| `star-imports` | py | `from x import *` |
+| `mutable-default-args` | py | `def f(x=[])` |
+| `builtin-shadowing` | py | Variable shadows builtin (filtered by allowlist) |
+| `placeholder-code` | py / js / ts / go / rs | `pass`/`...`/`raise NotImplementedError`/`todo!()`/`unimplemented!()` sole-body functions |
+| `unreachable-code` | py / js / ts / go / rs | Code after return/raise/break/panic |
+| `duplicate-keys` | py / js / ts | Duplicate dict/object keys |
+| `test-conditional` | py | `if`/`else` inside test functions -- tests should not branch |
+| `fixed-wait` | py | `time.sleep` / `asyncio.sleep` -- use polling instead |
+| `mock-spec-bypass` | py | Setting attributes on `Mock(spec=...)` -- bypasses spec validation |
+| `debugger-statement` | js / ts | `debugger` left in code |
+| `no-var` | js / ts | `var` usage (use `const`/`let`) |
+| `empty-block-statements` | js / ts | Empty `{}` blocks |
+| `useless-catch` | js / ts | `catch(e) { throw e }` |
+| `empty-error-check` | go | `if err != nil {}` with empty body |
+| `todo-macro` | rs | `todo!()` / `unimplemented!()` -- panics at runtime |
 
-### Layer 2 — Test Quality (Python test files only)
+### Universal (all languages)
 
 | Check | What it catches |
 |-------|-----------------|
-| `test-conditional` | `if`/`else` inside test functions — tests should not branch |
-| `fixed-wait` | `time.sleep` / `asyncio.sleep` / `wait_for_timeout` — use polling instead |
-| `mock-spec-bypass` | Setting attributes on `Mock(spec=...)` objects — bypasses spec validation |
+| `unicode-artifacts` | Em dashes, smart quotes, zero-width chars from LLM output |
+| `banned-patterns` | Custom regex patterns from `ecko.yaml` |
+| `import-layers` | Import boundary violations from `import_rules` config |
 
-### Layer 3 — Deep Analysis
+### Layer 3 -- Deep Analysis
 
-| Check | Tool | What it catches |
-|-------|------|-----------------|
-| `type-error` | tsc / pyright | Type errors across the project |
-| `dead-code` | vulture | Unused functions, classes, variables (80% confidence) |
-| `unused-export` | knip | Unused exports, imports, dependencies |
+| Check | What it catches |
+|-------|-----------------|
+| `dead-code` | Unused functions, classes, variables (native analysis) |
 
-## Reverb → Tune
+### External Adapters (optional)
+
+Core checks are native -- no external dependencies required. For deeper project-wide analysis, ecko can optionally run these external tools:
+
+| Tool | Language | Install |
+|------|----------|---------|
+| [pyright](https://github.com/microsoft/pyright) | Python | `pip install pyright` |
+| [tsc](https://github.com/microsoft/TypeScript) | TypeScript | `npm install -g typescript` |
+| [golangci-lint](https://github.com/golangci/golangci-lint) | Go | `go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest` |
+| [clippy](https://github.com/rust-lang/rust-clippy) | Rust | `rustup component add clippy` |
+
+External adapters run during Layer 3 (stop hook) only. When a tool is not installed, ecko skips it silently -- core checks always run.
+
+## MCP Server
+
+Ecko includes a built-in MCP server, allowing other tools and agents to invoke checks programmatically.
+
+| Tool | Description |
+|------|-------------|
+| `ecko_check_file` | Run checks on a single file and return echoes with fix suggestions |
+| `ecko_check_workspace` | Run checks on all modified files in the workspace |
+| `ecko_status` | Show configuration, available checks, and language support |
+| `ecko_dry_run` | List which checks would run on a file without executing them |
+| `ecko_explain` | Explain what a specific check does and why it matters |
+
+The MCP server runs over stdio transport. It is configured automatically when ecko is installed as a Claude Code plugin.
+
+## Reverb -> Tune
 
 Enable reverb to capture session insights when echoes are found:
 
@@ -176,7 +199,7 @@ reverb:
   enabled: true
 ```
 
-When the stop hook fires with echoes, it tips you to run `/ecko:reverb`. That command captures a structured note at `.ecko-reverb/`. Then `/ecko:tune` reads those notes alongside codebase patterns and recommends `ecko.yaml` rules — closing the feedback loop.
+When the stop hook fires with echoes, it tips you to run `/ecko:reverb`. That command captures a structured note at `.ecko-reverb/`. Then `/ecko:tune` reads those notes alongside codebase patterns and recommends `ecko.yaml` rules -- closing the feedback loop.
 
 ## Commands
 
@@ -187,7 +210,7 @@ When the stop hook fires with echoes, it tips you to run `/ecko:reverb`. That co
 | `/ecko:setup` | Install missing tools interactively |
 | `/ecko:reverb` | Capture a session note about what went wrong |
 | `/ecko:tune` | Analyze reverb notes and codebase, recommend ecko.yaml rules |
-| `/ecko:session` | Show session echo summary — files, top checks, self-corrections |
+| `/ecko:session` | Show session echo summary -- files, top checks, self-corrections |
 
 ## Configuration
 
@@ -200,7 +223,10 @@ autofix:
 
 # Disable specific deep analysis tools
 deep_analysis:
-  vulture: false
+  pyright: false
+
+# Enable fix suggestions in echo output (default: true)
+fix_suggestions: true
 
 # Flag patterns that shouldn't appear
 banned_patterns:
@@ -216,7 +242,7 @@ obsolete_terms:
 # Enforce architecture boundaries
 import_rules:
   - files: "routes/*.py"
-    deny_import:
+    deny:
       - repositories
       - sqlalchemy
     message: "Routes must not import from the data layer"
@@ -226,7 +252,7 @@ import_rules:
 #           git reset --hard, git clean -f
 blocked_commands:
   - pattern: "(pytest|npm test).*\\|"
-    message: "Do not pipe test output — run tests directly"
+    message: "Do not pipe test output -- run tests directly"
 
 # Cap repeated echoes per check per file (default: 5, 0 = unlimited)
 echo_cap_per_check: 5
@@ -234,6 +260,14 @@ echo_cap_per_check: 5
 # Nudge agent to leave reverb notes when echoes are found on stop
 reverb:
   enabled: true
+
+# Custom tree-sitter query checks
+custom_checks:
+  - name: no-println
+    languages: [rust]
+    query: '(macro_invocation macro: (identifier) @name (#eq? @name "println"))'
+    message: "Use tracing instead of println"
+    severity: warn
 
 # Disable specific checks entirely
 disabled_checks:
@@ -252,45 +286,25 @@ if x == None:  # ecko:ignore[singleton-comparison]
     pass
 ```
 
-- `# ecko:ignore` — suppress all checks on this line
-- `# ecko:ignore[check-name,other-check]` — suppress specific checks
+- `# ecko:ignore` -- suppress all checks on this line
+- `# ecko:ignore[check-name,other-check]` -- suppress specific checks
 - Works with `//` comments too (TypeScript/JavaScript)
 - Place on the same line or the line above
 
-## Tools
-
-| Tool | Layer | Resolved via |
-|------|-------|-------------|
-| [black](https://github.com/psf/black) | auto-fix | `uvx` / `pipx run` / PATH |
-| [isort](https://github.com/PyCQA/isort) | auto-fix | `uvx` / `pipx run` / PATH |
-| [prettier](https://github.com/prettier/prettier) | auto-fix | `npx` / PATH |
-| [ruff](https://github.com/astral-sh/ruff) | echoes | `uvx` / `pipx run` / PATH |
-| [biome](https://github.com/biomejs/biome) | echoes | `npx` / PATH |
-| [tsc](https://github.com/microsoft/TypeScript) | deep | `npx` / PATH |
-| [pyright](https://github.com/microsoft/pyright) | deep | `uvx` / `pipx run` / PATH |
-| [vulture](https://github.com/jendrikseipp/vulture) | deep | `uvx` / `pipx run` / PATH |
-| [knip](https://github.com/webpro-nl/knip) | deep | `npx` / PATH |
-
-All tools are resolved automatically — no manual installation required. Ecko checks PATH first (uses your local install if present), then falls back to `uvx`/`npx` which download and cache tools on demand.
-
-When tools are unavailable, ecko reports what was skipped with install hints:
-```
-~~ ecko ~~ note: ruff not found — try: pip install ruff (or uvx ruff)
-~~ ecko ~~ note: vulture not found — try: pip install vulture (or uvx vulture)
-```
-
 ## Troubleshooting
 
-**Ecko runs but reports nothing** — On stop, ecko now emits `~~ ecko ~~ clean sweep — 0 echoes across N files` when all checks pass, so you can tell it ran. Check if your tools are installed: run `/ecko:status`. For deeper visibility, set `ECKO_DEBUG=1` to see config loading, tool resolution, file detection, and timing. Ecko reports skipped tools with install hints (e.g., `ruff not found — try: pip install ruff`). If a tool times out or crashes, ecko emits a warning instead of silently returning nothing.
+**Ecko runs but reports nothing** -- On stop, ecko emits `~~ ecko ~~ clean sweep -- 0 echoes across N files` when all checks pass, so you can tell it ran. Check your config: run `/ecko:status`. For deeper visibility, set `ECKO_DEBUG=1` to see config loading, file detection, and timing.
 
-**Config changes aren't taking effect** — Verify your `ecko.yaml` is in the project root (same directory as `.git`). Ecko validates config and warns about unknown keys:
+**Ecko binary not found** -- The install script places the ecko binary inside the plugin directory. If hooks fail with "command not found", re-run the install script. Verify the binary exists: `ls ~/.claude/plugins/ecko/ecko` (or the equivalent path on your system). You can also run `ecko --help` to confirm it is on your PATH.
+
+**Config changes aren't taking effect** -- Verify your `ecko.yaml` is in the project root (same directory as `.git`). Ecko validates config and warns about unknown keys:
 ```
-~~ ecko ~~ warning: unknown config key 'disabled_check' (did you mean 'disabled_checks'?)
+~~ ecko ~~ warning: failed to parse ecko.yaml: unknown field `disabled_check`
 ```
 
-**A check is too noisy** — Disable it in `ecko.yaml`: `disabled_checks: [check-name]`. Or suppress per-line with `# ecko:ignore[check-name]`. You can also reduce repeated echoes with `echo_cap_per_check`.
+**A check is too noisy** -- Disable it in `ecko.yaml`: `disabled_checks: [check-name]`. Or suppress per-line with `# ecko:ignore[check-name]`. You can also reduce repeated echoes with `echo_cap_per_check`.
 
-**Layer 3 is slow** — Deep analysis tools (tsc, pyright, vulture, knip) run in parallel on stop. To disable a slow tool: `deep_analysis: { vulture: false }`.
+**Layer 3 is slow** -- Deep analysis runs in parallel on stop. To disable a slow external adapter: `deep_analysis: { pyright: false }`. Core checks are native and typically complete in under 2 seconds.
 
 ## License
 

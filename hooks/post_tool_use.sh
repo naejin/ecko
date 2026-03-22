@@ -4,31 +4,11 @@
 set -euo pipefail
 
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$(dirname "$0")/_find_ecko.sh"
 
-# Parse the file path from the hook input JSON
-# Claude Code passes tool input as JSON on stdin
+# Pipe stdin JSON directly to ecko (it parses file_path internally)
 INPUT=$(cat)
-FILE_PATH=$(printf '%s' "$INPUT" | python3 -c "
-import json, sys
-data = json.load(sys.stdin)
-print(data.get('file_path', ''))
-" 2>/dev/null || { printf '%s\n' "~~ ecko ~~ warning: failed to parse hook input JSON" >&2; printf ''; })
-
-if [ -z "$FILE_PATH" ]; then
-    exit 0
-fi
-
-# Resolve to absolute path
-if [[ "$FILE_PATH" != /* ]]; then
-    FILE_PATH="$(pwd)/$FILE_PATH"
-fi
-
-if [ ! -f "$FILE_PATH" ]; then
-    exit 0
-fi
-
-exec python3 "$PLUGIN_ROOT/checks/runner.py" \
-    --file "$FILE_PATH" \
+printf '%s' "$INPUT" | exec "$ECKO_BIN" \
     --mode post-tool-use \
     --cwd "$(pwd)" \
     --plugin-root "$PLUGIN_ROOT"

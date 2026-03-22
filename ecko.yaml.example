@@ -1,19 +1,19 @@
 # ecko.yaml - project-level configuration for the ecko plugin
 # Place this file in your project root to customize behavior.
+#
+# v2.0.0: All core checks are native (tree-sitter). External tools are optional
+# for deep analysis only (pyright, tsc, golangci-lint, clippy).
 
 # Auto-fix settings (Layer 1)
 autofix:
   enabled: true              # default: true
-  black: true                # default: true (if installed)
-  isort: true                # default: true (if installed)
   prettier: true             # default: true (if installed)
 
-# Deep analysis settings (Layer 3)
+# Deep analysis settings (optional external tools for Layer 3)
+# These are subprocess adapters -- the 28 native checks run without them.
 deep_analysis:
   tsc: true                  # default: true (if tsconfig.json exists)
   pyright: true              # default: true (if installed)
-  vulture: true              # default: true (if installed)
-  knip: true                 # default: true (if installed)
   golangci-lint: true        # default: true (if installed, Go projects)
   clippy: true               # default: true (if cargo + Cargo.toml, Rust projects)
 
@@ -30,7 +30,7 @@ obsolete_terms:
   - old: "UserProfile"
     new: "Account"
 
-# Import layer rules — architecture boundary enforcement
+# Import layer rules -- architecture boundary enforcement
 # Prevents modules from importing across layer boundaries.
 # Each rule specifies which files (by glob) are denied from importing which modules.
 import_rules: []
@@ -44,7 +44,7 @@ import_rules: []
   #     - api
   #   message: "Components should use hooks, not call API directly"
 
-# Builtin-shadowing allowlist — names allowed to shadow Python builtins (A001/A002)
+# Builtin-shadowing allowlist -- names allowed to shadow Python builtins (A001/A002)
 # When set, REPLACES the default allowlist entirely.
 # To extend the default, copy all default entries plus your additions.
 # Default: type, help, input, format, id, dir, open, filter, map, hash,
@@ -57,7 +57,7 @@ import_rules: []
 #   - id
 #   - custom_name
 
-# Echo cap per check per file — limits repeated echoes of the same check
+# Echo cap per check per file -- limits repeated echoes of the same check
 # Default: 5 (0 = unlimited). Useful for noisy checks like var-declarations.
 # echo_cap_per_check: 5
 
@@ -70,7 +70,7 @@ exclude: []
   # - "generated/*"
   # - "*.min.js"
 
-# Blocked bash commands — PreToolUse hook blocks these patterns
+# Blocked bash commands -- PreToolUse hook blocks these patterns
 # Hardcoded (always active):
 #   git commit --no-verify, rm -rf /, rm -rf ~,
 #   git push --force (use --force-with-lease), git reset --hard,
@@ -78,61 +78,54 @@ exclude: []
 # Add your own patterns below:
 blocked_commands: []
   # - pattern: "(pytest|npm test|cargo test).*\\|"
-  #   message: "Do not pipe test output — run tests directly for full context"
+  #   message: "Do not pipe test output -- run tests directly for full context"
   # - pattern: "git push.*--force(?!-with-lease)"
   #   message: "Use --force-with-lease instead of --force"
 
-# Reverb — show a tip to run /ecko:reverb when echoes are found on stop
+# Reverb -- show a tip to run /ecko:reverb when echoes are found on stop
 # Use /ecko:reverb to capture session notes, then /ecko:tune to turn them into rules
 reverb:
   enabled: false             # default: false
 
-# Session ledger — rolling window for self-correction tracking
+# Session ledger -- rolling window for self-correction tracking
 # Records echo counts per file per hook invocation in .ecko-session/ledger.jsonl
 # session_hours: 4           # default: 4 (rolling window in hours, 0 = disabled)
 
-# Cross-file echo cap — per-check limit across all files in stop mode output
+# Cross-file echo cap -- per-check limit across all files in stop mode output
 # Useful when the same check floods output across many files
 # Default: 0 (unlimited). Per-file cap (echo_cap_per_check) still applies.
 # echo_cap_cross_file: 15
 
-# Output format — "text" (default) or "json" for machine-readable output
+# Output format -- "text" (default) or "json" for machine-readable output
 # JSON mode emits schema_version 1 with complete echo data (no echo caps applied).
 # Exit codes remain the same regardless of format.
 # output_format: text
 
-# Use project biome config — when true, biome defers to your project's biome.json /
-# biome.jsonc instead of ecko's bundled config.
-# Unknown biome rules are auto-mapped to kebab-case ecko check names
-# (e.g., noDoubleEquals -> no-double-equals) and can be disabled via disabled_checks.
-# biome_use_project_config: false
+# Fix suggestions -- whether to include inline fix suggestions in echoes
+# When true, checks that can suggest fixes will include byte-range replacements.
+# fix_suggestions: true       # default: true
 
-# Use project ruff config — when true, ruff defers to your project's ruff.toml /
-# pyproject.toml [tool.ruff] instead of ecko's built-in rule selection.
-# --no-fix is always enforced (safety invariant). Echoes are still filtered by
-# disabled_checks using ecko check names.
-# ruff_use_project_config: false
-
-# Extra ruff rules — append additional ruff rule codes to ecko's built-in checks
-# Accepts full codes (C901, N801) and category prefixes (UP, SIM, C4).
-# Unmapped codes use their lowercased code as the check name (e.g., C901 -> c901).
-# These are additive — ecko's built-in rules always run.
-# See https://docs.astral.sh/ruff/rules/ for all available rule codes.
-# ruff_extra_rules:
-#   - C901     # function complexity
-#   - N801     # class name should use CapWords
-#   - UP       # pyupgrade (all rules in category)
-#   - SIM101   # use a single if instead of nested ifs
+# Custom tree-sitter checks -- define project-specific checks using tree-sitter queries
+# Each entry has a name, a language, a tree-sitter query, and an optional message.
+# custom_checks: []
+#   - name: no-console-log
+#     language: javascript
+#     query: '(call_expression function: (member_expression object: (identifier) @obj property: (property_identifier) @prop) (#eq? @obj "console") (#eq? @prop "log")) @match'
+#     message: "Remove console.log before committing"
+#   - name: no-unwrap
+#     language: rust
+#     query: '(call_expression function: (field_expression field: (field_identifier) @method) (#eq? @method "unwrap")) @match'
+#     message: "Use expect() or proper error handling instead of unwrap()"
 
 # Disable specific built-in checks (by ecko check name)
-# Also suppresses ruff/biome codes mapped to that check name
-# (e.g., disabled_checks: [c901] suppresses ruff C901)
-# Available checks: unused-imports, singleton-comparison, bare-except,
-#   star-imports, mutable-default-args, builtin-shadowing,
-#   empty-block-statements (biome),
-#   unreachable-code, debugger-statements, var-declarations, duplicate-keys,
-#   useless-catch, unicode-artifact, banned-pattern, obsolete-term,
-#   type-error, dead-code, unused-file, unused-export,
-#   test-conditional, fixed-wait, mock-spec-bypass, import-layer,
-#   placeholder-code
+# Available native checks (28 total):
+#   Python: unused-imports, singleton-comparison, bare-except, star-imports,
+#     mutable-default-args, builtin-shadowing, placeholder-code,
+#     unreachable-code, duplicate-keys, test-conditional, fixed-wait,
+#     mock-spec-bypass
+#   JS/TS: unused-imports, unreachable-code, debugger-statement, no-var,
+#     duplicate-keys, empty-block-statements, useless-catch, placeholder-code
+#   Go: unused-imports, empty-error-check, unreachable-code, placeholder-code
+#   Rust: unused-imports, todo-macro, unreachable-code, placeholder-code
+#   Universal: unicode-artifacts, banned-patterns, import-layers
 disabled_checks: []

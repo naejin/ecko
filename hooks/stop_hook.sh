@@ -4,8 +4,9 @@
 set -euo pipefail
 
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$(dirname "$0")/_find_ecko.sh"
 
-exec python3 "$PLUGIN_ROOT/checks/runner.py" \
+exec "$ECKO_BIN" \
     --mode stop \
     --cwd "$(pwd)" \
     --plugin-root "$PLUGIN_ROOT"

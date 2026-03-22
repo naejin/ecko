@@ -50,15 +50,33 @@ else
   fi
 fi
 
+# Ensure binary is available (download/build on first run)
+PLUGIN_DIR=""
+if command -v python3 >/dev/null 2>&1; then
+  PLUGIN_DIR=$(python3 -c "
+import json, os, pathlib
+config_dir = pathlib.Path.home() / '.claude'
+plugins_file = config_dir / 'plugins.json'
+if plugins_file.exists():
+    for p in json.load(open(plugins_file)):
+        if p.get('name') == 'ecko':
+            print(p.get('directory', ''))
+            break
+" 2>/dev/null || true)
+fi
+
+if [ -n "$PLUGIN_DIR" ] && [ -f "$PLUGIN_DIR/scripts/run.sh" ]; then
+  info "Downloading ecko binary..."
+  if "$PLUGIN_DIR/scripts/run.sh" --version >/dev/null 2>&1; then
+    info "Binary ready."
+  else
+    info "Binary download skipped. It will be fetched on first use."
+  fi
+fi
+
 echo ""
 info "${GREEN}Ecko installed!${RESET}"
+info "No external tools needed — ecko v2 checks are native."
+info "Optional: install pyright, tsc, golangci-lint, or clippy for deep analysis."
 info "Restart Claude Code to start using ecko."
 echo ""
-
-# Check for tool runners
-if command -v uvx >/dev/null 2>&1 || command -v npx >/dev/null 2>&1; then
-  info "External tools (ruff, biome, etc.) will run automatically via uvx/npx."
-else
-  info "Tip: install uv (https://docs.astral.sh/uv) or Node.js for full tool coverage."
-  info "Ecko works without them — it just runs fewer checks."
-fi

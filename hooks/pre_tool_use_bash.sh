@@ -3,20 +3,11 @@
 set -euo pipefail
 
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$(dirname "$0")/_find_ecko.sh"
 
-# Read tool input JSON from stdin and extract the command
+# Pipe stdin JSON directly to ecko (it parses the command field internally)
 INPUT=$(cat)
-COMMAND=$(printf '%s' "$INPUT" | python3 -c "
-import json, sys
-data = json.load(sys.stdin)
-print(data.get('command', ''))
-" 2>/dev/null || { printf '%s\n' "~~ ecko ~~ warning: failed to parse hook input JSON" >&2; printf ''; })
-
-if [ -z "$COMMAND" ]; then
-    exit 0
-fi
-
-printf '%s' "$COMMAND" | exec python3 "$PLUGIN_ROOT/checks/runner.py" \
+printf '%s' "$INPUT" | exec "$ECKO_BIN" \
     --mode pre-tool-use-bash \
     --cwd "$(pwd)" \
     --plugin-root "$PLUGIN_ROOT"
