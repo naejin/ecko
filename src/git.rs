@@ -142,9 +142,17 @@ mod tests {
 
     #[test]
     fn test_normalize_path_absolute() {
-        let result = normalize_path("/tmp/test.py", "/home/user");
-        // Should remain absolute
-        assert!(Path::new(&result).is_absolute());
+        #[cfg(not(windows))]
+        {
+            let result = normalize_path("/tmp/test.py", "/home/user");
+            // Should remain absolute on Unix
+            assert!(Path::new(&result).is_absolute());
+        }
+        #[cfg(windows)]
+        {
+            let result = normalize_path("C:\\temp\\test.py", "C:\\Users\\user");
+            assert!(Path::new(&result).is_absolute());
+        }
     }
 
     #[test]
