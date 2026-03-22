@@ -419,7 +419,7 @@ pub fn check_banned_patterns(
         for m in regex.find_iter(source) {
             let line_num = offset_to_line(&line_starts, m.start());
             echoes.push(Echo {
-                check: "banned-pattern".to_string(),
+                check: "banned-patterns".to_string(),
                 line: line_num,
                 message: message.clone(),
                 suggestion: String::new(),
@@ -698,7 +698,7 @@ pub fn check_import_layers(
             for denied in &rule.deny {
                 if matches_deny(imp, denied, is_python) {
                     echoes.push(Echo {
-                        check: "import-layer".to_string(),
+                        check: "import-layers".to_string(),
                         line: *lineno,
                         message: format!("Import '{}' is denied by rule: {}", imp, message),
                         suggestion: format!("Remove or replace the import of '{}'.", denied),
@@ -952,7 +952,7 @@ mod tests {
         let echoes = check_import_layers("utils.py", source, Lang::Python, &rules, "");
         assert_eq!(echoes.len(), 1);
         assert!(echoes[0].message.contains("django"));
-        assert_eq!(echoes[0].check, "import-layer");
+        assert_eq!(echoes[0].check, "import-layers");
     }
 
     #[test]

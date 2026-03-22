@@ -117,12 +117,16 @@ impl EckoMcpServer {
 #[tool_handler]
 impl ServerHandler for EckoMcpServer {
     fn get_info(&self) -> InitializeResult {
-        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
-            .with_instructions(
-                "Ecko -- deterministic code quality checks for AI agents. \
-             Use ecko_check_file to lint a file, ecko_status to see config, \
-             ecko_dry_run to preview checks, ecko_explain to understand a check.",
-            )
+        let mut result =
+            InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
+                .with_instructions(
+                    "Ecko -- deterministic code quality checks for AI agents. \
+                 Use ecko_check_file to lint a file, ecko_status to see config, \
+                 ecko_dry_run to preview checks, ecko_explain to understand a check.",
+                );
+        result.server_info.name = "ecko".to_string();
+        result.server_info.version = env!("CARGO_PKG_VERSION").to_string();
+        result
     }
 }
 

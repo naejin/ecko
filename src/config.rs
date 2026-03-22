@@ -46,6 +46,59 @@ fn default_severity() -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Guard metadata (from .ecko-guard.yaml)
+// ---------------------------------------------------------------------------
+
+/// Metadata about active `.ecko-guard.yaml` guard rules.
+///
+/// Populated during config merge, not from ecko.yaml deserialization.
+#[derive(Debug, Clone)]
+pub struct GuardMeta {
+    /// Unix epoch seconds when the guard file was created.
+    pub created: f64,
+    /// Human-readable task description (e.g., "auth-refactor").
+    pub task: String,
+    /// Check names sourced from the guard file (for friction detection).
+    /// Uses actual check names as emitted by checks (e.g., "banned-patterns", "import-layers").
+    pub guard_check_names: HashSet<String>,
+}
+
+/// Deserialization target for `.ecko-guard.yaml`.
+///
+/// Same rule fields as `EckoConfig` plus guard-specific metadata.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(default)]
+struct EckoGuardConfig {
+    created: f64,
+    #[serde(default)]
+    task: String,
+    #[serde(default)]
+    banned_patterns: Vec<PatternRule>,
+    #[serde(default)]
+    obsolete_terms: Vec<PatternRule>,
+    #[serde(default)]
+    blocked_commands: Vec<PatternRule>,
+    #[serde(default)]
+    import_rules: Vec<ImportRule>,
+    #[serde(default)]
+    custom_checks: Vec<CustomCheck>,
+}
+
+impl Default for EckoGuardConfig {
+    fn default() -> Self {
+        Self {
+            created: 0.0,
+            task: String::new(),
+            banned_patterns: Vec::new(),
+            obsolete_terms: Vec::new(),
+            blocked_commands: Vec::new(),
+            import_rules: Vec::new(),
+            custom_checks: Vec::new(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // EckoConfig
 // ---------------------------------------------------------------------------
 
@@ -68,6 +121,9 @@ pub struct EckoConfig {
     pub import_rules: Vec<ImportRule>,
     pub custom_checks: Vec<CustomCheck>,
     pub fix_suggestions: bool,
+    /// Guard metadata -- populated by merge logic, not from ecko.yaml.
+    #[serde(skip)]
+    pub guard_meta: Option<GuardMeta>,
 }
 
 impl Default for EckoConfig {
@@ -89,6 +145,7 @@ impl Default for EckoConfig {
             import_rules: Vec::new(),
             custom_checks: Vec::new(),
             fix_suggestions: true,
+            guard_meta: None,
         }
     }
 }
@@ -106,36 +163,105 @@ const DEFAULT_SHADOW_ALLOWLIST: &[&str] = &[
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Load `ecko.yaml` from `cwd`. Returns `EckoConfig::default()` when the file
-/// is absent or contains invalid YAML.
+/// Load `ecko.yaml` from `cwd`, then merge `.ecko-guard.yaml` if present.
+///
+/// Returns `EckoConfig::default()` when `ecko.yaml` is absent or unparseable.
+/// Guard rules are appended to the main config arrays; guard metadata is stored
+/// in `guard_meta` for lifecycle detection (age nudge, friction).
 pub fn load_config(cwd: &str) -> EckoConfig {
     let path = Path::new(cwd).join("ecko.yaml");
-    if !path.exists() {
+    let mut cfg = if !path.exists() {
         debug::debug("ecko.yaml not found, using defaults");
-        return EckoConfig::default();
-    }
-
-    let contents = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(e) => {
-            debug::debug(&format!("failed to read ecko.yaml: {e}"));
-            return EckoConfig::default();
+        EckoConfig::default()
+    } else {
+        let contents = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) => {
+                debug::debug(&format!("failed to read ecko.yaml: {e}"));
+                return EckoConfig::default();
+            }
+        };
+        match serde_yaml::from_str::<EckoConfig>(&contents) {
+            Ok(c) => {
+                debug::debug("ecko.yaml loaded successfully");
+                c
+            }
+            Err(e) => {
+                echo::emit(&format!(
+                    "~~ ecko ~~ warning: failed to parse ecko.yaml: {e}"
+                ));
+                EckoConfig::default()
+            }
         }
     };
 
-    match serde_yaml::from_str::<EckoConfig>(&contents) {
-        Ok(cfg) => {
-            debug::debug("ecko.yaml loaded successfully");
-            validate_custom_checks(&cfg);
-            cfg
+    // Merge .ecko-guard.yaml if present
+    merge_guard_config(&mut cfg, cwd);
+
+    validate_custom_checks(&cfg);
+    cfg
+}
+
+/// Load and merge `.ecko-guard.yaml` into the main config.
+///
+/// Appends guard rules to `banned_patterns`, `import_rules`, `custom_checks`,
+/// and `blocked_commands`. Populates `guard_meta` with lifecycle metadata.
+fn merge_guard_config(cfg: &mut EckoConfig, cwd: &str) {
+    let guard_path = Path::new(cwd).join(".ecko-guard.yaml");
+    if !guard_path.exists() {
+        return;
+    }
+
+    let contents = match std::fs::read_to_string(&guard_path) {
+        Ok(c) => c,
+        Err(e) => {
+            debug::debug(&format!("failed to read .ecko-guard.yaml: {e}"));
+            return;
         }
+    };
+
+    let guard: EckoGuardConfig = match serde_yaml::from_str(&contents) {
+        Ok(g) => g,
         Err(e) => {
             echo::emit(&format!(
-                "~~ ecko ~~ warning: failed to parse ecko.yaml: {e}"
+                "~~ ecko ~~ warning: failed to parse .ecko-guard.yaml: {e}"
             ));
-            EckoConfig::default()
+            return;
         }
+    };
+
+    // Collect guard check names for friction detection.
+    // Names must match the actual check names emitted by the checks.
+    let mut guard_check_names = HashSet::new();
+    if !guard.import_rules.is_empty() {
+        guard_check_names.insert("import-layers".to_string());
     }
+    if !guard.banned_patterns.is_empty() {
+        guard_check_names.insert("banned-patterns".to_string());
+    }
+    // Note: obsolete_terms is merged but has no Rust v2 check yet.
+    // When a check is implemented, add its name to guard_check_names here.
+    for cc in &guard.custom_checks {
+        guard_check_names.insert(cc.name.clone());
+    }
+
+    // Merge rule arrays
+    cfg.banned_patterns.extend(guard.banned_patterns);
+    cfg.obsolete_terms.extend(guard.obsolete_terms);
+    cfg.import_rules.extend(guard.import_rules);
+    cfg.custom_checks.extend(guard.custom_checks);
+    cfg.blocked_commands.extend(guard.blocked_commands);
+
+    let check_count = guard_check_names.len();
+    cfg.guard_meta = Some(GuardMeta {
+        created: guard.created,
+        task: guard.task,
+        guard_check_names,
+    });
+
+    debug::debug(&format!(
+        ".ecko-guard.yaml merged: {check_count} guard check types"
+    ));
 }
 
 /// Validate custom check queries at load time.
@@ -298,5 +424,84 @@ output_format: json
         assert!(!is_output_json(&cfg));
         cfg.output_format = "json".into();
         assert!(is_output_json(&cfg));
+    }
+
+    // --- Guard config merge tests ---
+
+    #[test]
+    fn guard_merge_with_both_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let ecko_yaml = r#"
+banned_patterns:
+  - pattern: "TODO"
+    message: "No TODOs"
+"#;
+        let guard_yaml = r#"
+created: 1711111800.0
+task: "auth-refactor"
+banned_patterns:
+  - pattern: "fetch\\("
+    glob: "*.tsx"
+    message: "Use hooks for API calls"
+import_rules:
+  - files: "components/*.tsx"
+    deny: [api]
+    message: "Components must not import api directly"
+"#;
+        std::fs::write(dir.path().join("ecko.yaml"), ecko_yaml).unwrap();
+        std::fs::write(dir.path().join(".ecko-guard.yaml"), guard_yaml).unwrap();
+        let cfg = load_config(dir.path().to_str().unwrap());
+
+        // ecko.yaml pattern + guard pattern = 2 total
+        assert_eq!(cfg.banned_patterns.len(), 2);
+        // Guard import rules merged
+        assert_eq!(cfg.import_rules.len(), 1);
+        // Guard metadata populated
+        let meta = cfg.guard_meta.as_ref().unwrap();
+        assert_eq!(meta.task, "auth-refactor");
+        assert!(meta.created > 0.0);
+        assert!(meta.guard_check_names.contains("import-layers"));
+        assert!(meta.guard_check_names.contains("banned-patterns"));
+    }
+
+    #[test]
+    fn guard_merge_only_guard_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let guard_yaml = r#"
+created: 1711111800.0
+task: "test-task"
+blocked_commands:
+  - pattern: "npm publish"
+    message: "Do not publish during refactor"
+"#;
+        // No ecko.yaml -- only guard file
+        std::fs::write(dir.path().join(".ecko-guard.yaml"), guard_yaml).unwrap();
+        let cfg = load_config(dir.path().to_str().unwrap());
+
+        assert_eq!(cfg.blocked_commands.len(), 1);
+        assert!(cfg.guard_meta.is_some());
+        assert_eq!(cfg.guard_meta.as_ref().unwrap().task, "test-task");
+    }
+
+    #[test]
+    fn guard_merge_invalid_guard_yaml() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("ecko.yaml"), "echo_cap_per_check: 3").unwrap();
+        std::fs::write(dir.path().join(".ecko-guard.yaml"), "{{{{ not yaml").unwrap();
+        let cfg = load_config(dir.path().to_str().unwrap());
+
+        // ecko.yaml loaded fine, guard skipped gracefully
+        assert_eq!(cfg.echo_cap_per_check, 3);
+        assert!(cfg.guard_meta.is_none());
+    }
+
+    #[test]
+    fn no_guard_meta_when_no_guard_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("ecko.yaml"), "echo_cap_per_check: 7").unwrap();
+        let cfg = load_config(dir.path().to_str().unwrap());
+
+        assert_eq!(cfg.echo_cap_per_check, 7);
+        assert!(cfg.guard_meta.is_none());
     }
 }

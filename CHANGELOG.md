@@ -1,5 +1,46 @@
 # Changelog
 
+## v2.2.0
+
+Deep modules, architecture guard, and README rewrite.
+
+### New features
+
+- **Architecture Guard** -- `/ecko:guard` command generates temporary `.ecko-guard.yaml` rules
+  from plan context. Rules enforce architectural decisions (import boundaries, banned patterns,
+  custom checks) on every Write/Edit. Lifecycle management via age nudge (7-day warning in stop
+  hook), friction detection (warns when guard rules fire on 3+ files per session), and
+  `--review`/`--clear` flags.
+- **Deep module unification** -- `check_workspace` MCP tool now delegates to `run_stop_inner()`,
+  the same codepath as the CLI stop hook. Gets exclusion filtering, ledger scoping, deduplication,
+  dead code analysis, external adapters, and echo caps for free. Previously reimplemented a subset
+  with 10 missing features.
+- **Dynamic version in MCP** -- `ecko_status` tool uses `env!("CARGO_PKG_VERSION")` instead of
+  hardcoded version string.
+
+### Bug fixes
+
+- **README badge version** -- badge text now matches actual version.
+- **MCP `check_workspace` correctness** -- previously skipped exclusion filtering, ledger scoping,
+  echo deduplication, dead code analysis, external adapters, cross-file echo caps, and session stats.
+- **MCP server identity** -- server info now reports `"ecko"` with correct version instead of
+  inheriting rmcp's default name and version.
+- **Check name normalization** -- `banned-patterns` and `import-layers` check names are now
+  consistent across echo emission, `disabled_checks` filtering, guard tracking, `status()`, and
+  `explain()`. Previously singular forms in echoes caused `disabled_checks` to silently fail.
+- **Guard .gitignore guidance** -- `/ecko:guard` command now reminds users to add
+  `.ecko-guard.yaml` to `.gitignore`.
+
+### Internal
+
+- `StopResult` struct in `runner.rs` -- structured return type from `run_stop_inner()`.
+- `EckoGuardConfig` + `GuardMeta` in `config.rs` -- guard file deserialization and lifecycle metadata.
+- `emit_guard_lifecycle()` in `runner.rs` -- age nudge + friction detection.
+
+### Tests
+
+- 303 Rust unit tests (~1s) + 69 validation fixtures.
+
 ## v2.1.0
 
 Correctness -- 0 false positives across 69 validation fixtures in 4 languages.

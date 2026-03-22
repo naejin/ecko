@@ -12,7 +12,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `scripts/install.sh` / `scripts/install.ps1` — marketplace installer + binary acquisition
 - `src/` — Rust source (see "Rust structure" section below)
 - `queries/` — tree-sitter `.scm` query files (embedded at compile time)
-- `commands/` — slash commands (ping, status, setup, tune, reverb, session)
+- `commands/` — slash commands (ping, status, setup, tune, reverb, session, guard)
 - `checks/` — legacy Python package (v1, hooks no longer use this)
 - `ecko.yaml.example` — full config reference (check names, banned patterns, etc.)
 - `CHANGELOG.md` — version history for all releases
@@ -133,6 +133,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Test fixtures in `tests/fixtures/` must NOT start with `test_` prefix unless they are intentionally bad test files (conftest.py `collect_ignore_glob` excludes them)
 - Dry-run smoke test: `python3 checks/runner.py --file <path> --mode dry-run --cwd <dir> --plugin-root .`
 - Stop-mode validation: copy source to tmp dir, `git init` + commit all, modify files (append newline), then run `--mode stop`. Must copy WITHOUT `.git` dir (`shutil.copytree` with `ignore_patterns('.git')`) or nested git confuses `_get_modified_files()`
+- Guard integration: create `.ecko-guard.yaml` with test rules in tmp dir, run `--mode post-tool-use`, verify guard rules are enforced alongside ecko.yaml rules
 - Use parallel subagents for multi-repo validation (5 agents x 2 repos each works well)
 - CI matrix: `{ubuntu, macos, windows} × {Python 3.10, 3.12}` -- 6 jobs total (`.github/workflows/test.yml`)
 
@@ -146,6 +147,8 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `boundary/` files: edge cases with documented expected outcomes (known limitations)
 - When fixing a FP: add the triggering pattern to `clean/` FIRST, verify it fails, fix the check, verify it passes
 - When fixing a missed TP: add the pattern to `bad/` FIRST, verify it doesn't trigger, fix the check, verify it triggers
+- `run.sh` parses file headers: `# Expected: exit N` for exit code, `check=name` for check assertion
+- Always run `./validation/run.sh` after any check modification -- faster than cargo test for FP/TP verification
 - Self-check: all ecko source files (`src/**/*.rs`) must produce 0 echoes
 
 ## Releasing
@@ -161,8 +164,9 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Verify with: `curl -fsSL https://github.com/naejin/ecko/releases/latest/download/install.sh | bash`
 - Update `commands/` listing in Structure section of CLAUDE.md if adding/removing commands
 - Update commands table in README.md if adding/removing commands
-- CHANGELOG test count must match actual `cargo test` output (currently 299)
+- CHANGELOG test count must match actual `cargo test` output (currently 303)
 - Update test count in both CHANGELOG.md AND CLAUDE.md after final stabilization, not after initial implementation (review rounds add tests)
+- Update release notes retroactively: `gh release edit vX --repo naejin/ecko --notes-file /tmp/notes.md`
 - Update README.md checks tables when adding new checks
 
 ## Transparency (v0.6.0)
@@ -253,8 +257,30 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `--mode dry-run`: lists applicable checks without executing tools, always returns 0
 - `run_dry_run()` in runner.py, outputs to stdout (informational, not a hook)
 
+## Architecture Guard (v2.2.0)
+- `.ecko-guard.yaml` — temporary architectural guardrails, gitignored, separate from permanent `ecko.yaml`
+- Same `EckoConfig` rule types: `banned_patterns`, `import_rules`, `custom_checks`, `blocked_commands`
+- Plus metadata: `created` (f64 Unix epoch seconds), `task` (string)
+- `EckoGuardConfig` struct in `config.rs` — deserialization target for guard file
+- `GuardMeta` struct in `config.rs` — lifecycle metadata stored in `EckoConfig.guard_meta` (`#[serde(skip)]`)
+- `guard_check_names: HashSet<String>` in `GuardMeta` — tracks which check names came from guard file (for friction detection)
+- `merge_guard_config()` in `config.rs` — loads `.ecko-guard.yaml`, extends rule arrays, populates `guard_meta`
+- `load_config()` calls `merge_guard_config()` after loading `ecko.yaml`
+- `emit_guard_lifecycle()` in `runner.rs` — age nudge (>=7 days) + friction detection (3+ files per guard check)
+- Called from `run_stop()` after all output, not from `run_stop_inner()` (lifecycle is CLI-only, not MCP)
+- `/ecko:guard` command: `commands/guard.md` — generate rules from conversation context, `--review`, `--clear`
+- `.ecko-guard.yaml` excluded from linting by language detection (`.yaml` returns `Lang::Unknown`)
+
+## Deep module pattern (v2.2.0)
+- `StopResult` struct in `runner.rs` — carries all stop-mode results (echoes, elapsed, corrections, session entries, file count, config)
+- `run_stop_inner()` — core logic, returns `StopResult`. Used by both CLI hook and MCP tool.
+- `run_stop()` — thin wrapper that formats output and returns exit code
+- `tools::check_workspace()` in `mcp/tools.rs` — delegates to `run_stop_inner()`, formats as JSON. Single codepath for workspace checks.
+- MCP `status()` uses `env!("CARGO_PKG_VERSION")` — version can never drift from Cargo.toml
+
 ## Current version and next milestone
-- Current: v2.1.0 (validation suite, FP fixes, Go alias/blank imports, guard hardening)
+- Current: v2.2.0 (deep modules, architecture guard, README rewrite)
+- Previous: v2.1.0 (validation suite, FP fixes, Go alias/blank imports, guard hardening)
 - Previous: v2.0.0 (Rust rewrite with tree-sitter + MCP server)
 - Previous: v1.3.0 (Python, fingerprinting + dry-run)
 
@@ -294,8 +320,9 @@ The Python code in `checks/` still exists but hooks now point to the Rust binary
 - `.claude-plugin/.mcp.json` — MCP server config for Claude Code
 
 ## Rust build + test
+- Always run `cargo fmt` before committing -- CI runs `cargo fmt --check` and rejects unformatted code (common issue: multi-item-per-line const arrays)
 - Build: `cargo build --release` (8.2MB binary, ~30s)
-- Test: `cargo test` (283 tests, ~1s)
+- Test: `cargo test` (299 tests, ~1s)
 - Check: `cargo check` (fast type-check without codegen)
 - Smoke test: `target/release/ecko --mode post-tool-use --file <path> --cwd <dir> --plugin-root .`
 - Bash guard: `echo "COMMAND" | target/release/ecko --mode pre-tool-use-bash --cwd . --plugin-root .`
@@ -323,6 +350,9 @@ The Python code in `checks/` still exists but hooks now point to the Rust binary
 - `capture_index_or_skip(query, name)` in query_engine.rs — returns `usize::MAX` on missing capture (safe no-match sentinel), never `unwrap_or(0)` which silently uses wrong capture
 - `Severity` derives `Copy` — use `Severity::Warn` / `Severity::Error` directly, never `.clone()`
 - Rust `regex` crate is inherently ReDoS-safe — no thread-based timeouts needed (unlike Python)
+- Timestamp math: use `std::time::SystemTime` + `UNIX_EPOCH` for age calculations — never add `chrono` (zero-dependency constraint)
+- MCP tools must delegate to `runner.rs` functions — never reimplement check/stop logic in `mcp/tools.rs` (Deep Module pattern)
+- Version strings in Rust code: use `env!("CARGO_PKG_VERSION")` — never hardcode version numbers
 - Guard patterns lazy-compiled via `LazyLock<Vec<(Regex, &str)>>` — compiled once per process
 - `run_with_timeout(cmd, timeout, tool_name)` in external/mod.rs drains stdout/stderr via threads to prevent pipe buffer deadlock; emits user-facing "not found" vs "timed out" messages
 - GlobSet for user excludes pre-compiled once in `run_stop()`, passed to filter functions
@@ -350,6 +380,7 @@ The Python code in `checks/` still exists but hooks now point to the Rust binary
 ## Rust v2 config changes (vs Python v1)
 - Removed: `ruff_use_project_config`, `biome_use_project_config`, `ruff_extra_rules`
 - Added: `custom_checks` (tree-sitter query checks in ecko.yaml), `fix_suggestions` (bool, default true)
+- Added: `.ecko-guard.yaml` (temporary guard rules, merged by `merge_guard_config()` in config.rs)
 - Kept: `disabled_checks`, `exclude`, `banned_patterns`, `obsolete_terms`, `blocked_commands`, `autofix`, `deep_analysis`, `echo_cap_per_check`, `echo_cap_cross_file`, `session_hours`, `output_format`, `reverb`, `builtin_shadow_allowlist`, `import_rules`
 
 ## Incomplete / future work (v2.1)
@@ -362,6 +393,8 @@ The Python code in `checks/` still exists but hooks now point to the Rust binary
 - Rust trait imports: `TRAIT_IMPORTS` allowlist in `rust_checks.rs` -- add new traits as needed
 - Edge cases verified in `validation/rust/clean/` (derive macros, trait imports, test modules, comments after return)
 - AI agents insert unicode (em dashes, arrows) in doc comments -- always `sed -i 's/\xe2\x80\x94/--/g'` after bulk code generation
+- Check name strings must match between echo emission and `list_applicable_checks()`/`status()`/`explain()` -- always verify against the actual `check:` field in the check implementation. Universal checks use plural: `"banned-patterns"`, `"import-layers"`. Language checks use singular: `"unused-imports"`, `"bare-except"`.
+- `status()` and `explain()` in `mcp/tools.rs` must stay in sync -- every entry in `all_checks` array must have a corresponding `explain()` match arm
 - `relative_path()` lives in `git.rs` -- single source of truth, never duplicate in other modules
 - `canonicalize_or_normalize()` lives in `git.rs` -- shared by clippy and golangci adapters for path matching, never duplicate
 - `explain()` in mcp/tools.rs uses `match` not `HashMap::from` -- zero allocation per call

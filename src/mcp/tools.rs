@@ -1,11 +1,13 @@
 //! MCP tool implementations -- the actual logic behind each MCP tool.
-
-use std::collections::HashMap;
+//!
+//! `check_workspace` delegates to `runner::run_stop_inner()` so hooks and MCP
+//! tools share a single codepath (Deep Module pattern).
 
 use crate::checks;
 use crate::config;
 use crate::echo;
 use crate::lang;
+use crate::runner;
 use crate::suppress;
 
 /// Run checks on a single file, return JSON result.
@@ -31,43 +33,16 @@ pub fn check_file(file_path: &str, cwd: &str) -> String {
 }
 
 /// Run checks on all modified files in workspace, return JSON result.
+///
+/// Delegates to `runner::run_stop_inner()` -- same codepath as the CLI stop hook.
+/// Gets exclusion filtering, ledger scoping, deduplication, dead code analysis,
+/// external adapters, and echo caps for free.
+///
+/// Always returns JSON regardless of `output_format` config -- MCP consumers
+/// are machine callers that need structured data.
 pub fn check_workspace(cwd: &str) -> String {
-    let cfg = config::load_config(cwd);
-    let disabled = config::get_disabled_checks(&cfg);
-    let session_hours = cfg.session_hours;
-
-    let files = crate::git::get_modified_files(cwd, session_hours);
-    if files.is_empty() {
-        return r#"{"echoes": {}, "file_count": 0, "message": "no modified files found"}"#
-            .to_string();
-    }
-
-    let mut all_echoes: HashMap<String, Vec<echo::Echo>> = HashMap::new();
-
-    for file_path in &files {
-        if lang::is_skippable_stub(file_path) {
-            continue;
-        }
-        let detected_lang = lang::detect_language(file_path);
-        if detected_lang == lang::Lang::Unknown {
-            continue;
-        }
-
-        let source = match std::fs::read_to_string(file_path) {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-
-        let mut echoes = checks::run_layer2_checks(file_path, detected_lang, &source, cwd, &cfg);
-        echoes = suppress::filter_suppressed(echoes, file_path);
-        echoes.retain(|e| !disabled.contains(&e.check));
-
-        if !echoes.is_empty() {
-            all_echoes.insert(file_path.clone(), echoes);
-        }
-    }
-
-    echo::format_stop_echoes_json(&all_echoes, 0.0, &[], &HashMap::new())
+    let result = runner::run_stop_inner(cwd, None);
+    echo::format_stop_echoes_json(&result.all_echoes, result.elapsed, &[], &result.corrections)
 }
 
 /// Show ecko status -- config, available checks, language support.
@@ -100,6 +75,7 @@ pub fn status(cwd: &str) -> String {
         // Rust
         "todo-macro",
         // Universal
+        "trailing-whitespace",
         "unicode-artifacts",
         "banned-patterns",
         "import-layers",
@@ -109,7 +85,10 @@ pub fn status(cwd: &str) -> String {
     ];
 
     let mut lines = Vec::new();
-    lines.push("ecko v2.0.0 -- deterministic code quality checks for AI agents".to_string());
+    lines.push(format!(
+        "ecko v{} -- deterministic code quality checks for AI agents",
+        env!("CARGO_PKG_VERSION")
+    ));
     lines.push(String::new());
     lines.push(format!("Languages: {}", languages.join(", ")));
     lines.push(format!(
@@ -196,6 +175,7 @@ pub fn explain(check_name: &str) -> String {
         "useless-catch" => "Flags `catch(e) { throw e }` which catches an error only to immediately re-throw it. The try-catch is redundant.",
         "empty-error-check" => "Flags `if err != nil {}` in Go with an empty body. The error is detected but not handled -- either handle it or explicitly ignore it with `_ = err`.",
         "todo-macro" => "Flags `todo!()` and `unimplemented!()` macros in Rust. These panic at runtime and should be implemented before merging.",
+        "trailing-whitespace" => "Flags lines ending with spaces or tabs. Trailing whitespace clutters diffs and can cause issues in whitespace-sensitive contexts.",
         "unicode-artifacts" => "Flags Unicode characters like smart quotes, em dashes, and zero-width spaces in code. These are usually copy-paste artifacts from documentation or chat that break compilation or cause subtle bugs.",
         "dead-code" => "Detects functions, classes, and variables that are defined but never referenced anywhere in the project. Dead code is maintenance burden and confusion.",
         "unused-exports" => "Detects exported symbols in JS/TS modules that are never imported by any other file. Unused exports bloat the API surface and confuse consumers.",

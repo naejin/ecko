@@ -4,7 +4,7 @@
 //! `run_stop` implements Layer 2 re-sweep across modified files.
 //! `run_dry_run` lists applicable checks without executing.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use rayon::prelude::*;
@@ -19,6 +19,23 @@ use crate::git;
 use crate::lang::{self, Lang};
 use crate::ledger;
 use crate::suppress;
+
+// ---------------------------------------------------------------------------
+// StopResult -- structured output from run_stop_inner()
+// ---------------------------------------------------------------------------
+
+/// Structured result from stop-mode analysis.
+///
+/// Returned by `run_stop_inner()` so both the CLI hook and MCP tool
+/// can consume the same data without reimplementing the logic.
+pub struct StopResult {
+    pub all_echoes: HashMap<String, Vec<Echo>>,
+    pub elapsed: f64,
+    pub corrections: HashMap<String, i32>,
+    pub session_entries: Vec<ledger::LedgerEntry>,
+    pub file_count: usize,
+    pub config: config::EckoConfig,
+}
 
 /// Type alias for adapter thread results to reduce type complexity.
 type AdapterResult = (&'static str, HashMap<String, Vec<Echo>>);
@@ -214,27 +231,154 @@ pub fn run_post_tool_use(file_path: &str, cwd: &str, plugin_root: &str) -> i32 {
 
 /// Stop mode -- deep analysis across modified files.
 ///
-/// 1. Load config
-/// 2. Get modified files (override or git detection)
-/// 3. Scope to ledger-tracked files when available
-/// 4. Filter excluded files, skip stubs
-/// 5. Run Layer 2 checks in parallel (rayon)
-/// 6. External adapters (pyright, tsc, golangci-lint, clippy) via threads
-/// 7. Merge, deduplicate, filter suppressed/disabled
-/// 8. Format output (text or JSON)
-/// 9. Emit self-correction summary and session stats
-/// 10. Return 1 if echoes, 0 if clean
+/// Thin wrapper over `run_stop_inner()` that formats output and returns an exit code.
 pub fn run_stop(cwd: &str, plugin_root: &str, files_override: Option<Vec<String>>) -> i32 {
-    let t0 = std::time::Instant::now();
     debug::debug(&format!(
         "run_stop: cwd={cwd}, plugin_root={plugin_root}, files_override={files_override:?}"
     ));
 
+    let result = run_stop_inner(cwd, files_override);
+
+    let json_output = config::is_output_json(&result.config);
+    let cross_cap = result.config.echo_cap_cross_file;
+
+    // Session ledger: self-correction + session stats
+    let correction_line = echo::format_correction_summary(&result.corrections);
+    let session_line = if !result.session_entries.is_empty() {
+        let json_values = ledger::entries_to_json_values(&result.session_entries);
+        echo::format_session_stats(&json_values, &result.corrections)
+    } else {
+        String::new()
+    };
+
+    // Format and emit output
+    if json_output {
+        let output = echo::format_stop_echoes_json(
+            &result.all_echoes,
+            result.elapsed,
+            &[],
+            &result.corrections,
+        );
+        echo::emit(&output);
+        emit_guard_lifecycle(&result);
+        return if result.all_echoes.is_empty() { 0 } else { 1 };
+    }
+
+    if result.all_echoes.is_empty() {
+        if result.file_count > 0 {
+            let file_word = if result.file_count == 1 {
+                "file"
+            } else {
+                "files"
+            };
+            echo::emit(&format!(
+                "~~ ecko ~~ clean sweep \u{2014} 0 echoes across {} {file_word} ({:.1}s)",
+                result.file_count, result.elapsed
+            ));
+        }
+        if !correction_line.is_empty() {
+            echo::emit(&correction_line);
+        }
+        if !session_line.is_empty() {
+            echo::emit(&session_line);
+        }
+        emit_guard_lifecycle(&result);
+        return 0;
+    }
+
+    let output = echo::format_stop_echoes(&result.all_echoes, cross_cap);
+    echo::emit(&output);
+    echo::emit(&format!("~~ ecko ~~ finished in {:.1}s", result.elapsed));
+    if !correction_line.is_empty() {
+        echo::emit(&correction_line);
+    }
+    if !session_line.is_empty() {
+        echo::emit(&session_line);
+    }
+    emit_guard_lifecycle(&result);
+
+    1
+}
+
+// ---------------------------------------------------------------------------
+// Guard lifecycle (age nudge + friction detection)
+// ---------------------------------------------------------------------------
+
+/// Emit guard lifecycle warnings when `.ecko-guard.yaml` is active.
+///
+/// 1. Age nudge: warns when guard file is older than 7 days.
+/// 2. Friction detection: warns when guard-sourced checks fire on 3+ files
+///    in the current session (signal that rules may be stale).
+fn emit_guard_lifecycle(result: &StopResult) {
+    let meta = match &result.config.guard_meta {
+        Some(m) => m,
+        None => return,
+    };
+
+    // --- Age nudge ---
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+
+    if meta.created > 0.0 {
+        let age_days = ((now - meta.created) / 86400.0) as i64;
+        if age_days >= 7 {
+            let task_info = if meta.task.is_empty() {
+                String::new()
+            } else {
+                format!(" (task: {})", meta.task)
+            };
+            echo::emit(&format!(
+                "~~ ecko ~~ note: .ecko-guard.yaml is {age_days} days old{task_info}. Run /ecko:guard --review or --clear."
+            ));
+        }
+    }
+
+    // --- Friction detection ---
+    if result.session_entries.is_empty() || meta.guard_check_names.is_empty() {
+        return;
+    }
+
+    let mut check_files: HashMap<String, HashSet<String>> = HashMap::new();
+    for entry in &result.session_entries {
+        if entry.mode == "post-tool-use" {
+            for check_name in entry.echoes.keys() {
+                if meta.guard_check_names.contains(check_name) {
+                    check_files
+                        .entry(check_name.clone())
+                        .or_default()
+                        .insert(entry.file.clone());
+                }
+            }
+        }
+    }
+
+    let mut friction_checks: Vec<&String> = check_files
+        .iter()
+        .filter(|(_, files)| files.len() >= 3)
+        .map(|(check, _)| check)
+        .collect();
+
+    if !friction_checks.is_empty() {
+        friction_checks.sort();
+        echo::emit(&format!(
+            "~~ ecko ~~ note: guard rule(s) fired on 3+ files this session: {}. Still relevant? /ecko:guard --review",
+            friction_checks.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+        ));
+    }
+}
+
+/// Core stop-mode logic -- returns structured `StopResult`.
+///
+/// Used by both the CLI hook (`run_stop`) and the MCP tool (`check_workspace`).
+/// Single codepath for all workspace-level checking.
+pub fn run_stop_inner(cwd: &str, files_override: Option<Vec<String>>) -> StopResult {
+    let t0 = std::time::Instant::now();
+
     // --- 1. Load config once ---
     let config = config::load_config(cwd);
     let disabled = config::get_disabled_checks(&config);
-    let json_output = config::is_output_json(&config);
-    let cross_cap = config.echo_cap_cross_file;
     let session_hours = config.session_hours;
 
     // --- 2. Get modified files ---
@@ -258,7 +402,7 @@ pub fn run_stop(cwd: &str, plugin_root: &str, files_override: Option<Vec<String>
     // Prevents flooding with pre-existing issues on first use of existing projects:
     // get_modified_files includes git log --since files the agent never touched.
     let raw_files = if files_override.is_none() && !session_entries.is_empty() {
-        let ledger_files: std::collections::HashSet<String> = session_entries
+        let ledger_files: HashSet<String> = session_entries
             .iter()
             .filter(|e| e.mode == "post-tool-use" && !e.file.is_empty())
             .map(|e| git::normalize_path(&e.file, cwd))
@@ -295,7 +439,14 @@ pub fn run_stop(cwd: &str, plugin_root: &str, files_override: Option<Vec<String>
 
     if modified.is_empty() {
         debug::debug("stop: no modified files after filtering");
-        return 0;
+        return StopResult {
+            all_echoes: HashMap::new(),
+            elapsed: t0.elapsed().as_secs_f64(),
+            corrections: HashMap::new(),
+            session_entries,
+            file_count: 0,
+            config,
+        };
     }
 
     debug::debug(&format!(
@@ -344,7 +495,7 @@ pub fn run_stop(cwd: &str, plugin_root: &str, files_override: Option<Vec<String>
 
     // --- 7. Deduplicate echoes per file (same check + line) ---
     for echoes in all_echoes.values_mut() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
         echoes.retain(|e| seen.insert((e.check.clone(), e.line)));
     }
 
@@ -364,57 +515,23 @@ pub fn run_stop(cwd: &str, plugin_root: &str, files_override: Option<Vec<String>
         }
     }
 
-    // --- 8. Compute timing ---
+    // --- 8. Compute timing + corrections ---
     let elapsed = t0.elapsed().as_secs_f64();
-
-    // --- 9. Session ledger: self-correction + session stats ---
     let corrections = if !session_entries.is_empty() {
         ledger::compute_self_corrections(&session_entries)
     } else {
         HashMap::new()
     };
+    let file_count = modified.len();
 
-    let correction_line = echo::format_correction_summary(&corrections);
-    let session_line = if !session_entries.is_empty() {
-        let json_values = ledger::entries_to_json_values(&session_entries);
-        echo::format_session_stats(&json_values, &corrections)
-    } else {
-        String::new()
-    };
-
-    // --- 10. Format and emit output ---
-    if json_output {
-        let output = echo::format_stop_echoes_json(&all_echoes, elapsed, &[], &corrections);
-        echo::emit(&output);
-        return if all_echoes.is_empty() { 0 } else { 1 };
+    StopResult {
+        all_echoes,
+        elapsed,
+        corrections,
+        session_entries,
+        file_count,
+        config,
     }
-
-    if all_echoes.is_empty() {
-        let file_word = if modified.len() == 1 { "file" } else { "files" };
-        echo::emit(&format!(
-            "~~ ecko ~~ clean sweep \u{2014} 0 echoes across {} {file_word} ({elapsed:.1}s)",
-            modified.len()
-        ));
-        if !correction_line.is_empty() {
-            echo::emit(&correction_line);
-        }
-        if !session_line.is_empty() {
-            echo::emit(&session_line);
-        }
-        return 0;
-    }
-
-    let output = echo::format_stop_echoes(&all_echoes, cross_cap);
-    echo::emit(&output);
-    echo::emit(&format!("~~ ecko ~~ finished in {elapsed:.1}s"));
-    if !correction_line.is_empty() {
-        echo::emit(&correction_line);
-    }
-    if !session_line.is_empty() {
-        echo::emit(&session_line);
-    }
-
-    1
 }
 
 // ---------------------------------------------------------------------------
