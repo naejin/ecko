@@ -103,6 +103,9 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Integration tests that assert on clean output (`output == ""`) must tolerate tool warnings — on Windows, tools may resolve via npx but fail with WinError 2
 - Adapter post-filter tests: use `os.path.normpath()` on both cwd and modified_files paths — Windows normalizes `/tmp/project` to `\tmp\project`
 - `_get_modified_files` includes recently committed files — tests asserting `output == ""` after commit must account for clean-sweep message
+- `.gitignore` must include `target/` -- Rust build artifacts are large and must never be committed
+- Tests using Unix paths (`/tmp/...`) must use `#[cfg(not(windows))]` guard with Windows equivalent (`C:\\temp\\...`) -- Windows `Path::is_absolute()` requires drive letter
+- MCP stdio smoke tests: `{ printf '...'; sleep 2; } | binary` -- keep stdin open so async tokio runtime processes all messages before EOF (Rosetta/Windows are slower to start)
 - Debug mode smoke test: `ECKO_DEBUG=1 python3 checks/runner.py --file <path> --mode post-tool-use --cwd <dir> --plugin-root .`
 - Stop mode with explicit files: `python3 checks/runner.py --file x --mode stop --cwd <dir> --plugin-root . --files file1.py,file2.py`
 
@@ -153,7 +156,9 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - Add entry to `CHANGELOG.md`
 - Push and wait for CI green on all 3 Rust matrix jobs before tagging
 - If CI fails, fix and push again -- do NOT tag until all 3 jobs are green
+- Delete tag and re-tag if release CI fails: `git tag -d vX && git push origin :refs/tags/vX`, fix, push, re-tag
 - Tag, push tag, `gh release create v{X} --title "..." --notes-file /tmp/release-notes.md` (flag is `-F`/`--notes-file`, NOT `--body`)
+- Release CI MCP smoke test requires `sleep 2` after piped JSON-RPC messages for cross-platform reliability
 - Release CI (release.yml) triggers on tag push: builds 5 targets, validates artifacts, publishes GitHub Release with checksums
 - Verify with: `curl -fsSL https://github.com/naejin/ecko/releases/latest/download/install.sh | bash`
 - Update `commands/` listing in Structure section of CLAUDE.md if adding/removing commands
