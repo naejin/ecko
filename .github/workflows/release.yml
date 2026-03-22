@@ -132,10 +132,12 @@ jobs:
           fi
 
           # MCP initialize + tools/list
-          RESP=$(printf '%s\n%s\n%s\n' \
+          # sleep keeps stdin open so the async runtime can process all messages
+          # before EOF (Rosetta/Windows are slower to start tokio)
+          RESP=$( { printf '%s\n%s\n%s\n' \
             '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci-test","version":"1.0"}}}' \
             '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
-            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' ; sleep 2; } \
             | "$BIN" --mode mcp-server 2>/dev/null || true)
 
           TOOL_COUNT=$(echo "$RESP" | python3 -c "
