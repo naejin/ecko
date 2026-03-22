@@ -17,15 +17,41 @@ const UNUSED_IMPORTS_QUERY: &str = include_str!("../../queries/rust/unused_impor
 /// Tree-sitter can't resolve trait method dispatch, so these are always FPs.
 const TRAIT_IMPORTS: &[&str] = &[
     // std traits used via method calls
-    "Read", "Write", "Display", "Debug", "Iterator", "IntoIterator",
-    "FromStr", "Into", "From", "TryFrom", "TryInto", "AsRef", "AsMut",
-    "Deref", "DerefMut", "Clone", "Default", "Drop",
-    "Hash", "Eq", "Ord", "PartialEq", "PartialOrd",
-    "Send", "Sync", "Unpin", "Sized",
+    "Read",
+    "Write",
+    "Display",
+    "Debug",
+    "Iterator",
+    "IntoIterator",
+    "FromStr",
+    "Into",
+    "From",
+    "TryFrom",
+    "TryInto",
+    "AsRef",
+    "AsMut",
+    "Deref",
+    "DerefMut",
+    "Clone",
+    "Default",
+    "Drop",
+    "Hash",
+    "Eq",
+    "Ord",
+    "PartialEq",
+    "PartialOrd",
+    "Send",
+    "Sync",
+    "Unpin",
+    "Sized",
     // async traits
-    "Future", "Stream", "Sink",
+    "Future",
+    "Stream",
+    "Sink",
     // common external crate traits
-    "StreamingIterator", "Serialize", "Deserialize",
+    "StreamingIterator",
+    "Serialize",
+    "Deserialize",
 ];
 
 pub fn run_checks(_file_path: &str, source: &str, _config: &EckoConfig) -> Vec<Echo> {
