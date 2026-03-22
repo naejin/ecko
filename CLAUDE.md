@@ -292,7 +292,7 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - `compute_changed_lines(source, edit)` — finds new_string in post-edit source, returns 1-based line set via binary search on line-start offsets
 - Uses `saturating_sub(1)` on end_byte to prevent trailing newline from bleeding into next line
 - Returns `None` (no filtering) when new_string not found — defensive fallback, never silently suppresses
-- Returns `Some(empty)` for empty new_string (deletion) — correct, deletions can't introduce new issues
+- Returns `None` for empty new_string (deletion) — deletions can expose bugs (removing guard clauses, imports), so full-file check is correct
 - Changed lines computed AFTER autofix re-read (step 7a), against post-autofix source
 - Diff-scope filter applied before suppression/disabled/cap filters (step 8a)
 - Stop mode unchanged — full-file checks for comprehensive coverage
@@ -312,8 +312,9 @@ Three layers: silent auto-fix (Layer 1), per-file echoes (Layer 2), deep analysi
 - File-type dispatch: `__init__.py` (re-export hints), test files (fixture hints), regular files (generic hints)
 - Enrichment happens centrally in runner.rs step 10a, NOT in individual check modules
 - Only populates empty `suggestion` fields (preserves check-provided suggestions)
-- `group_by_check()` in echo.rs returns 4-tuple: `(name, lines, is_error, first_suggestion)`
+- `CheckGroup` struct in echo.rs replaces raw tuple in `group_by_check()` — named fields (name, lines, has_error, suggestion)
 - Compact text output appends ` -- {suggestion}` after check group (one hint per check per file)
+- Language-specific hints must be gated on file extension (e.g., pytest fixture hint only for `.py`, not `_test.go`)
 - `banned-patterns`, `import-layers`, `obsolete-terms` return empty string (user message is sufficient)
 
 ## Current version and next milestone
@@ -355,6 +356,7 @@ The Python code in `checks/` still exists but hooks now point to the Rust binary
 - `src/fix.rs` — fix suggestion generation (byte-range replacements)
 - `src/fingerprint.rs` — framework detection from dependency files
 - `src/formatter.rs` — Layer 1 autofix (trailing whitespace + optional black/prettier)
+- `src/hints.rs` — check-specific session directives (`pattern_directive`) + file-type-aware contextual suggestions (`contextual_suggestion`). Pure string logic, no I/O.
 - `src/suppress.rs` — `ecko:ignore` inline comment suppression; supports both space-separated (`# ecko:ignore unused-imports`) and bracket notation (`# ecko:ignore[unused-imports]`)
 - `src/debug.rs` — `ECKO_DEBUG=1` stderr output via `OnceLock`
 - `queries/` — tree-sitter `.scm` files embedded at compile time via `include_str!()`
@@ -420,7 +422,7 @@ The Python code in `checks/` still exists but hooks now point to the Rust binary
 
 ## Rust v2 config changes (vs Python v1)
 - Removed: `ruff_use_project_config`, `biome_use_project_config`, `ruff_extra_rules`
-- Added: `custom_checks` (tree-sitter query checks in ecko.yaml), `fix_suggestions` (bool, default true)
+- Added: `custom_checks` (tree-sitter query checks in ecko.yaml), `fix_suggestions` (bool, default true), `pattern_threshold` (usize, default 3, session pattern detection)
 - Added: `.ecko-guard.yaml` (temporary guard rules, merged by `merge_guard_config()` in config.rs)
 - Kept: `disabled_checks`, `exclude`, `banned_patterns`, `obsolete_terms`, `blocked_commands`, `autofix`, `deep_analysis`, `echo_cap_per_check`, `echo_cap_cross_file`, `session_hours`, `output_format`, `reverb`, `builtin_shadow_allowlist`, `import_rules`
 - `obsolete_terms` now has a native Rust check: `ObsoleteTermRule` struct (`{old: String, new: String, glob: String}`), matched via regex with glob-based file filtering
